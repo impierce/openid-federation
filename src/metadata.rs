@@ -149,6 +149,18 @@ pub struct OpenIdConnectProviderMetadata {
     /// Operation terms of service URI
     #[serde(skip_serializing_if = "Option::is_none")]
     pub op_tos_uri: Option<Url>,
+    /// Signed JWK Set URI (federation-specific)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_jwks_uri: Option<Url>,
+    /// Client registration types supported (federation-specific)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_registration_types_supported: Option<Vec<String>>,
+    /// Federation registration endpoint (federation-specific)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federation_registration_endpoint: Option<Url>,
+    /// Logo URI (federation-specific)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logo_uri: Option<Url>,
 }
 
 /// OpenID Connect Relying Party metadata.

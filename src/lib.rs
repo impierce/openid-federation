@@ -458,84 +458,123 @@ mod tests {
     // Helper functions for the LIGO Wiki test
 
     fn create_test_symmetric_key() -> Jwk {
-    Jwk {
-        kty: "oct".to_string(),
-        use_: Some("sig".to_string()),
-        key_ops: None,
-        alg: Some("HS256".to_string()),
-        kid: Some("test-key-1".to_string()),
-        x5u: None,
-        x5c: None,
-        x5t: None,
-        x5t_s256: None,
-        n: None,
-        e: None,
-        d: None,
-        p: None,
-        q: None,
-        dp: None,
-        dq: None,
-        qi: None,
-        crv: None,
-        x: None,
-        y: None,
-        k: Some("dGVzdF9zZWNyZXRfa2V5".to_string()), // base64 encoded "test_secret_key"
+        Jwk {
+            kty: "oct".to_string(),
+            use_: Some("sig".to_string()),
+            key_ops: None,
+            alg: Some("HS256".to_string()),
+            kid: Some("test-key-1".to_string()),
+            x5u: None,
+            x5c: None,
+            x5t: None,
+            x5t_s256: None,
+            n: None,
+            e: None,
+            d: None,
+            p: None,
+            q: None,
+            dp: None,
+            dq: None,
+            qi: None,
+            crv: None,
+            x: None,
+            y: None,
+            k: Some("dGVzdF9zZWNyZXRfa2V5".to_string()), // base64 encoded "test_secret_key"
+        }
     }
-}
+
+    fn create_test_rsa_key() -> Jwk {
+        Jwk {
+            kty: "RSA".to_string(),
+            use_: None,
+            key_ops: None,
+            alg: None,
+            kid: Some("dEEtRjlzY3djcENuT01wOGxrZlkxb3RIQVJlMTY0...".to_string()),
+            x5u: None,
+            x5c: None,
+            x5t: None,
+            x5t_s256: None,
+            n: Some("x97YKqc9Cs-DNtFrQ7_vhXoH9bwkDWW6En2jJ044yH...".to_string()),
+            e: Some("AQAB".to_string()),
+            d: None,
+            p: None,
+            q: None,
+            dp: None,
+            dq: None,
+            qi: None,
+            crv: None,
+            x: None,
+            y: None,
+            k: None,
+        }
+    }
 
     fn create_op_entity_configuration(op_url: &str, university_url: &str) -> EntityConfiguration {
-    use crate::utils::time;
-    
-    let entity_id = Url::parse(op_url).unwrap();
-    let mut jwks = JwkSet::new();
-    jwks.add_key(create_test_symmetric_key());
-    
-    let exp = time::standard_entity_config_expiry();
-    let iat = time::now();
-    
-    let mut metadata = EntityMetadata::new();
-    metadata.openid_provider = Some(OpenIdConnectProviderMetadata {
-        issuer: entity_id.clone(),
-        authorization_endpoint: Url::parse(&format!("{}/auth", op_url)).unwrap(),
-        token_endpoint: Some(Url::parse(&format!("{}/token", op_url)).unwrap()),
-        userinfo_endpoint: Some(Url::parse(&format!("{}/userinfo", op_url)).unwrap()),
-        jwks_uri: Url::parse(&format!("{}/jwks", op_url)).unwrap(),
-        registration_endpoint: Some(Url::parse(&format!("{}/register", op_url)).unwrap()),
-        scopes_supported: Some(vec!["openid".to_string(), "profile".to_string(), "email".to_string()]),
-        response_types_supported: vec!["code".to_string()],
-        response_modes_supported: Some(vec!["query".to_string(), "fragment".to_string()]),
-        grant_types_supported: Some(vec!["authorization_code".to_string()]),
-        acr_values_supported: None,
-        subject_types_supported: vec!["public".to_string()],
-        id_token_signing_alg_values_supported: vec!["RS256".to_string()],
-        id_token_encryption_alg_values_supported: None,
-        id_token_encryption_enc_values_supported: None,
-        userinfo_signing_alg_values_supported: None,
-        userinfo_encryption_alg_values_supported: None,
-        userinfo_encryption_enc_values_supported: None,
-        request_object_signing_alg_values_supported: None,
-        request_object_encryption_alg_values_supported: None,
-        request_object_encryption_enc_values_supported: None,
-        token_endpoint_auth_methods_supported: Some(vec!["client_secret_basic".to_string()]),
-        token_endpoint_auth_signing_alg_values_supported: None,
-        display_values_supported: None,
-        claim_types_supported: None,
-        claims_supported: Some(vec!["sub".to_string(), "name".to_string(), "email".to_string()]),
-        service_documentation: None,
-        claims_locales_supported: None,
-        ui_locales_supported: None,
-        claims_parameter_supported: None,
-        request_parameter_supported: None,
-        request_uri_parameter_supported: None,
-        require_request_uri_registration: None,
-        op_policy_uri: None,
-        op_tos_uri: None,
-    });
-    
-    EntityConfiguration::new(entity_id, jwks, exp, iat)
-        .with_metadata(metadata)
-        .with_authority_hints(vec![Url::parse(university_url).unwrap()])
-}
+        use crate::utils::time;
+        
+        let entity_id = Url::parse(op_url).unwrap();
+        let mut jwks = JwkSet::new();
+        jwks.add_key(create_test_rsa_key());
+        
+        let exp = time::standard_entity_config_expiry();
+        let iat = time::now();
+        
+        let mut metadata = EntityMetadata::new();
+        metadata.openid_provider = Some(OpenIdConnectProviderMetadata {
+            issuer: Url::parse(&format!("{}/openid", op_url)).unwrap(),
+            authorization_endpoint: Url::parse(&format!("{}/openid/authorization", op_url)).unwrap(),
+            token_endpoint: Some(Url::parse(&format!("{}/openid/token", op_url)).unwrap()),
+            userinfo_endpoint: None,
+            jwks_uri: Url::parse(&format!("{}/openid/jwks.jose", op_url)).unwrap(),
+            registration_endpoint: None,
+            scopes_supported: None,
+            response_types_supported: vec!["code".to_string(), "code id_token".to_string(), "token".to_string()],
+            response_modes_supported: None,
+            grant_types_supported: Some(vec![
+                "authorization_code".to_string(), 
+                "implicit".to_string(), 
+                "urn:ietf:params:oauth:grant-type:jwt-bearer".to_string()
+            ]),
+            acr_values_supported: None,
+            subject_types_supported: vec!["pairwise".to_string(), "public".to_string()],
+            id_token_signing_alg_values_supported: vec!["ES256".to_string(), "RS256".to_string()],
+            id_token_encryption_alg_values_supported: None,
+            id_token_encryption_enc_values_supported: None,
+            userinfo_signing_alg_values_supported: None,
+            userinfo_encryption_alg_values_supported: None,
+            userinfo_encryption_enc_values_supported: None,
+            request_object_signing_alg_values_supported: None,
+            request_object_encryption_alg_values_supported: None,
+            request_object_encryption_enc_values_supported: None,
+            token_endpoint_auth_methods_supported: Some(vec![
+                "client_secret_post".to_string(),
+                "client_secret_basic".to_string(),
+                "client_secret_jwt".to_string(),
+                "private_key_jwt".to_string()
+            ]),
+            token_endpoint_auth_signing_alg_values_supported: None,
+            display_values_supported: None,
+            claim_types_supported: None,
+            claims_supported: None,
+            service_documentation: None,
+            claims_locales_supported: None,
+            ui_locales_supported: None,
+            claims_parameter_supported: None,
+            request_parameter_supported: Some(true),
+            request_uri_parameter_supported: None,
+            require_request_uri_registration: None,
+            op_policy_uri: Some(Url::parse(&format!("{}/en/website/legal-information/", op_url.replace("//127.0.0.1", "//www.localhost"))).unwrap()),
+            op_tos_uri: None,
+            signed_jwks_uri: Some(Url::parse(&format!("{}/openid/jwks.jose", op_url)).unwrap()),
+            client_registration_types_supported: Some(vec!["automatic".to_string(), "explicit".to_string()]),
+            federation_registration_endpoint: Some(Url::parse(&format!("{}/openid/fedreg", op_url)).unwrap()),
+            logo_uri: Some(Url::parse(&format!("{}/img/localhost-logo-left-neg-SE.svg", op_url.replace("//127.0.0.1", "//www.localhost"))).unwrap()),
+        });
+        
+        EntityConfiguration::new(entity_id, jwks, exp, iat)
+            .with_metadata(metadata)
+            .with_authority_hints(vec![Url::parse(university_url).unwrap()])
+    }
 
     fn create_university_statement_about_op(university_url: &str, op_url: &str, federation_url: &str) -> EntityStatement {
     use crate::utils::time;
@@ -686,6 +725,10 @@ mod tests {
             require_request_uri_registration: Some(false),
             op_policy_uri: None,
             op_tos_uri: None,
+            signed_jwks_uri: None,
+            client_registration_types_supported: None,
+            federation_registration_endpoint: None,
+            logo_uri: None,
         });
         
         EntityConfiguration::new(entity_id, jwks, exp, iat)
