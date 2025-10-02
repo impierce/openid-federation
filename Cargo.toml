@@ -1,0 +1,13 @@
+[package]
+name = "openid-federation"
+version = "0.1.0"
+edition = "2021"
+description = "A Rust implementation of the OpenID Federation 1.0 standard"
+repository = "https://github.com/impierce/openid-federation"
+license = "Apache-2.0"
+keywords = ["openid", "federation", "identity", "oauth", "authentication"]
+categories = ["authentication", "web-programming"]
+
+[dependencies]
+
+[dev-dependencies]
