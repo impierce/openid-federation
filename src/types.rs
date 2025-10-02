@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use url::Url;
 
 /// Entity identifier - a URL that uniquely identifies an entity in the federation.
+/// 
+/// Reference: OpenID Federation 1.0 - Section 2.1 Entity Identifier
+/// https://openid.net/specs/openid-federation-1_0.html#name-entity-identifier
 pub type EntityId = Url;
 
 /// JSON Web Key Set as defined in RFC 7517.
@@ -17,9 +20,15 @@ pub type RawJwkSet = HashMap<String, serde_json::Value>;
 pub type Metadata = HashMap<String, serde_json::Value>;
 
 /// Authority hints - URLs of immediate superior entities.
+/// 
+/// Reference: OpenID Federation 1.0 - Section 3.1.2 Authority Hints
+/// https://openid.net/specs/openid-federation-1_0.html#name-authority-hints
 pub type AuthorityHints = Vec<EntityId>;
 
 /// Entity types as defined in the OpenID Federation specification.
+/// 
+/// Reference: OpenID Federation 1.0 - Section 2.2 Entity Types
+/// https://openid.net/specs/openid-federation-1_0.html#name-entity-types
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntityType {
@@ -38,6 +47,9 @@ pub enum EntityType {
 }
 
 /// Trust mark as defined in the OpenID Federation specification.
+/// 
+/// Reference: OpenID Federation 1.0 - Section 6 Trust Marks
+/// https://openid.net/specs/openid-federation-1_0.html#name-trust-marks
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrustMark {
     /// Trust mark identifier
@@ -55,6 +67,9 @@ pub struct TrustMark {
 }
 
 /// Policy language as defined in the OpenID Federation specification.
+/// 
+/// Reference: OpenID Federation 1.0 - Section 7 Metadata Policy
+/// https://openid.net/specs/openid-federation-1_0.html#name-metadata-policy
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PolicyLanguage {
     /// Essential policy operators

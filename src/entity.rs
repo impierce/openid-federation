@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Entity Statement as defined in the OpenID Federation specification.
+/// 
+/// Reference: OpenID Federation 1.0 - Section 3.1 Entity Statement
+/// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntityStatement {
     /// Standard JWT claims
@@ -44,6 +47,9 @@ pub struct EntityStatement {
 }
 
 /// Entity Configuration as defined in the OpenID Federation specification.
+/// 
+/// Reference: OpenID Federation 1.0 - Section 3.2 Entity Configuration
+/// https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntityConfiguration {
     /// Standard JWT claims
@@ -130,6 +136,9 @@ impl EntityStatement {
     }
 
     /// Validate the entity statement structure.
+    /// 
+    /// Reference: OpenID Federation 1.0 - Section 3.1.1 Entity Statement Validation
+    /// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-validation
     pub fn validate(&self) -> FederationResult<()> {
         // Basic validation
         if self.claims.iss == self.claims.sub {
@@ -231,6 +240,9 @@ impl EntityConfiguration {
     }
 
     /// Validate the entity configuration structure.
+    /// 
+    /// Reference: OpenID Federation 1.0 - Section 3.2.1 Entity Configuration Validation
+    /// https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration-valida
     pub fn validate(&self) -> FederationResult<()> {
         // Entity configuration must be self-signed
         if self.claims.iss != self.claims.sub {

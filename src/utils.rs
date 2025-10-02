@@ -21,6 +21,9 @@ impl FederationClient {
     }
 
     /// Fetch an entity configuration from the well-known endpoint.
+    /// 
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Entity Configuration Endpoint
+    /// https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration-endpoi
     pub async fn fetch_entity_configuration(&self, entity_id: &EntityId) -> FederationResult<String> {
         let well_known_url = self.build_well_known_url(entity_id)?;
 
@@ -42,6 +45,9 @@ impl FederationClient {
     }
 
     /// Fetch an entity statement from a federation fetch endpoint.
+    /// 
+    /// Reference: OpenID Federation 1.0 - Section 8.2 Federation Fetch Endpoint
+    /// https://openid.net/specs/openid-federation-1_0.html#name-federation-fetch-endpoint
     pub async fn fetch_entity_statement(
         &self,
         fetch_endpoint: &Url,
@@ -71,6 +77,9 @@ impl FederationClient {
     }
 
     /// List entities from a federation list endpoint.
+    /// 
+    /// Reference: OpenID Federation 1.0 - Section 8.3 Federation List Endpoint
+    /// https://openid.net/specs/openid-federation-1_0.html#name-federation-list-endpoint
     pub async fn list_entities(&self, list_endpoint: &Url) -> FederationResult<Vec<EntityId>> {
         let response = self
             .client
@@ -94,6 +103,9 @@ impl FederationClient {
     }
 
     /// Build the well-known OpenID Federation URL for an entity.
+    /// 
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Entity Configuration Endpoint
+    /// https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration-endpoi
     fn build_well_known_url(&self, entity_id: &EntityId) -> FederationResult<Url> {
         let mut url = entity_id.clone();
         url.set_path("/.well-known/openid_federation");
@@ -114,6 +126,9 @@ pub struct UrlValidator;
 
 impl UrlValidator {
     /// Validate that a URL is suitable for use as an entity identifier.
+    /// 
+    /// Reference: OpenID Federation 1.0 - Section 2.1 Entity Identifier
+    /// https://openid.net/specs/openid-federation-1_0.html#name-entity-identifier
     pub fn validate_entity_id(url: &Url) -> FederationResult<()> {
         // Entity ID must use HTTPS
         if url.scheme() != "https" {
