@@ -2,11 +2,11 @@
 name = "openid-federation"
 version = "0.1.0"
 edition = "2021"
-authors = ["Impierce <hello@impierce.com>"]
+
 description = "A Rust implementation of the OpenID Federation 1.0 standard"
 repository = "https://github.com/impierce/openid-federation"
-license = "MIT OR Apache-2.0"
-readme = "README.md"
+license = "Apache-2.0"
+
 keywords = ["openid", "federation", "identity", "oauth", "authentication"]
 categories = ["authentication", "web-programming"]
 
