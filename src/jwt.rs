@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// JWT Header with federation-specific extensions.
-/// 
+///
 /// Reference: OpenID Federation 1.0 - Section 3.1.3 Entity Statement Format
 /// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-format
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -27,7 +27,7 @@ pub struct FederationJwtHeader {
 }
 
 /// Standard JWT claims for OpenID Federation.
-/// 
+///
 /// Reference: OpenID Federation 1.0 - Section 3.1.4 Entity Statement Claims
 /// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-claims
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

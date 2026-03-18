@@ -4,7 +4,7 @@ use crate::{EntityConfiguration, EntityId, EntityStatement, FederationError, Fed
 use serde::{Deserialize, Serialize};
 
 /// Trust Chain as defined in the OpenID Federation specification.
-/// 
+///
 /// Reference: OpenID Federation 1.0 - Section 4 Trust Chains  
 /// https://openid.net/specs/openid-federation-1_0.html#name-trust-chains
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,7 +35,7 @@ impl TrustChainValidator {
     }
 
     /// Validate a trust chain.
-    /// 
+    ///
     /// Reference: OpenID Federation 1.0 - Section 4.2 Trust Chain Validation
     /// https://openid.net/specs/openid-federation-1_0.html#name-trust-chain-validation
     pub fn validate_trust_chain(&self, trust_chain: &TrustChain) -> FederationResult<ValidatedTrustChain> {
@@ -226,7 +226,7 @@ impl ValidatedTrustChain {
     }
 
     /// Get the final resolved metadata for the leaf entity.
-    /// 
+    ///
     /// Reference: OpenID Federation 1.0 - Section 4.3 Metadata Resolution
     /// https://openid.net/specs/openid-federation-1_0.html#name-metadata-resolution
     pub fn resolve_metadata(&self) -> FederationResult<crate::EntityMetadata> {
