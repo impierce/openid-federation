@@ -2,7 +2,6 @@
 
 use crate::jwk::JwkSet;
 use crate::{EntityId, FederationError, FederationResult};
-use chrono::{DateTime, Utc};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -39,13 +38,13 @@ pub struct JwtClaims {
     /// Audience
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aud: Option<serde_json::Value>, // Can be string or array of strings
-    /// Expiration timestamp
-    pub exp: DateTime<Utc>,
-    /// Not before timestamp
+    /// Expiration timestamp (seconds since Unix epoch, per RFC 7519 §4.1.4)
+    pub exp: i64,
+    /// Not before timestamp (seconds since Unix epoch, per RFC 7519 §4.1.5)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub nbf: Option<DateTime<Utc>>,
-    /// Issued at timestamp
-    pub iat: DateTime<Utc>,
+    pub nbf: Option<i64>,
+    /// Issued at timestamp (seconds since Unix epoch, per RFC 7519 §4.1.6)
+    pub iat: i64,
     /// JWT ID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jti: Option<String>,

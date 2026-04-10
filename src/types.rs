@@ -1,6 +1,5 @@
 //! Common types used throughout the OpenID Federation implementation.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
@@ -59,11 +58,11 @@ pub struct TrustMark {
     /// Trust mark subject
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub: Option<EntityId>,
-    /// Issued at timestamp
-    pub iat: DateTime<Utc>,
-    /// Expiration timestamp
+    /// Issued at timestamp (seconds since Unix epoch, per RFC 7519 §4.1.6)
+    pub iat: i64,
+    /// Expiration timestamp (seconds since Unix epoch, per RFC 7519 §4.1.4)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub exp: Option<DateTime<Utc>>,
+    pub exp: Option<i64>,
 }
 
 /// Policy language as defined in the OpenID Federation specification.

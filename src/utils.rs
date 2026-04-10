@@ -174,40 +174,40 @@ impl UrlValidator {
 
 /// Time utilities for federation operations.
 pub mod time {
-    use chrono::{DateTime, Duration, Utc};
+    use chrono::{Duration, Utc};
 
-    /// Get the current UTC time.
-    pub fn now() -> DateTime<Utc> {
-        Utc::now()
+    /// Get the current UTC time as seconds since Unix epoch.
+    pub fn now() -> i64 {
+        Utc::now().timestamp()
     }
 
-    /// Create a DateTime that is valid for the specified duration from now.
-    pub fn expires_in(duration: Duration) -> DateTime<Utc> {
-        now() + duration
+    /// Get a timestamp that expires after the specified duration from now.
+    pub fn expires_in(duration: Duration) -> i64 {
+        now() + duration.num_seconds()
     }
 
-    /// Create a DateTime that is valid from the specified duration ago.
-    pub fn issued_ago(duration: Duration) -> DateTime<Utc> {
-        now() - duration
+    /// Get a timestamp that was issued the specified duration ago.
+    pub fn issued_ago(duration: Duration) -> i64 {
+        now() - duration.num_seconds()
     }
 
     /// Check if a timestamp is in the past (expired).
-    pub fn is_expired(timestamp: DateTime<Utc>) -> bool {
+    pub fn is_expired(timestamp: i64) -> bool {
         timestamp < now()
     }
 
     /// Check if a timestamp is in the future (not yet valid).
-    pub fn is_not_yet_valid(timestamp: DateTime<Utc>) -> bool {
+    pub fn is_not_yet_valid(timestamp: i64) -> bool {
         timestamp > now()
     }
 
     /// Get a standard expiration time for entity configurations (24 hours from now).
-    pub fn standard_entity_config_expiry() -> DateTime<Utc> {
+    pub fn standard_entity_config_expiry() -> i64 {
         expires_in(Duration::hours(24))
     }
 
     /// Get a standard expiration time for entity statements (1 hour from now).
-    pub fn standard_entity_statement_expiry() -> DateTime<Utc> {
+    pub fn standard_entity_statement_expiry() -> i64 {
         expires_in(Duration::hours(1))
     }
 }

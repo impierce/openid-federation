@@ -30,7 +30,7 @@ pub use utils::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration, Utc};
+    use chrono::Duration;
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use url::Url;
 
@@ -38,8 +38,8 @@ mod tests {
     fn test_entity_configuration_creation() {
         let entity_id = Url::parse("https://example.com").unwrap();
         let jwks = JwkSet::new();
-        let exp = Utc::now() + Duration::hours(24);
-        let iat = Utc::now();
+        let exp = (chrono::Utc::now() + Duration::hours(24)).timestamp();
+        let iat = chrono::Utc::now().timestamp();
 
         let config = EntityConfiguration::new(entity_id.clone(), jwks, exp, iat);
 
@@ -52,8 +52,8 @@ mod tests {
     fn test_entity_statement_creation() {
         let issuer = Url::parse("https://issuer.example.com").unwrap();
         let subject = Url::parse("https://subject.example.com").unwrap();
-        let exp = Utc::now() + Duration::hours(1);
-        let iat = Utc::now();
+        let exp = (chrono::Utc::now() + Duration::hours(1)).timestamp();
+        let iat = chrono::Utc::now().timestamp();
 
         let statement = EntityStatement::new(issuer.clone(), subject.clone(), exp, iat);
 

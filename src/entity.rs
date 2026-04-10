@@ -4,7 +4,7 @@ use crate::{
     AuthorityHints, Constraints, EntityId, EntityMetadata, FederationError, FederationResult, JwkSet, JwtClaims,
     PolicyLanguage, TrustMark,
 };
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -73,7 +73,7 @@ pub struct EntityConfiguration {
 
 impl EntityStatement {
     /// Create a new Entity Statement.
-    pub fn new(issuer: EntityId, subject: EntityId, exp: DateTime<Utc>, iat: DateTime<Utc>) -> Self {
+    pub fn new(issuer: EntityId, subject: EntityId, exp: i64, iat: i64) -> Self {
         let claims = JwtClaims {
             iss: issuer,
             sub: subject,
@@ -151,7 +151,7 @@ impl EntityStatement {
         }
 
         // Check expiration
-        if self.claims.exp < Utc::now() {
+        if self.claims.exp < Utc::now().timestamp() {
             return Err(FederationError::InvalidEntityStatement(
                 "Entity statement has expired".to_string(),
             ));
@@ -159,7 +159,7 @@ impl EntityStatement {
 
         // Check not before if present
         if let Some(nbf) = self.claims.nbf {
-            if nbf > Utc::now() {
+            if nbf > Utc::now().timestamp() {
                 return Err(FederationError::InvalidEntityStatement(
                     "Entity statement is not yet valid".to_string(),
                 ));
@@ -199,7 +199,7 @@ impl EntityStatement {
 
 impl EntityConfiguration {
     /// Create a new Entity Configuration.
-    pub fn new(entity_id: EntityId, jwks: JwkSet, exp: DateTime<Utc>, iat: DateTime<Utc>) -> Self {
+    pub fn new(entity_id: EntityId, jwks: JwkSet, exp: i64, iat: i64) -> Self {
         let claims = JwtClaims {
             iss: entity_id.clone(),
             sub: entity_id,
@@ -259,7 +259,7 @@ impl EntityConfiguration {
         }
 
         // Check expiration
-        if self.claims.exp < Utc::now() {
+        if self.claims.exp < Utc::now().timestamp() {
             return Err(FederationError::InvalidEntityStatement(
                 "Entity configuration has expired".to_string(),
             ));
@@ -267,7 +267,7 @@ impl EntityConfiguration {
 
         // Check not before if present
         if let Some(nbf) = self.claims.nbf {
-            if nbf > Utc::now() {
+            if nbf > Utc::now().timestamp() {
                 return Err(FederationError::InvalidEntityStatement(
                     "Entity configuration is not yet valid".to_string(),
                 ));
