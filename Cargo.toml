@@ -15,7 +15,10 @@ jsonwebtoken = "9.0"
 url = { version = "2.4", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "rustls",
+] }
 tokio = { version = "1.0", features = ["full"] }
 base64 = "0.21"
 
