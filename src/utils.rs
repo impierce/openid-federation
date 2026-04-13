@@ -108,7 +108,7 @@ impl FederationClient {
     /// https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration-endpoi
     fn build_well_known_url(&self, entity_id: &EntityId) -> FederationResult<Url> {
         let mut url = entity_id.clone();
-        url.set_path("/.well-known/openid_federation");
+        url.set_path("/.well-known/openid-federation");
         url.set_query(None);
         url.set_fragment(None);
         Ok(url)

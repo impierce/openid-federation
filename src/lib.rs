@@ -226,7 +226,7 @@ mod tests {
         let op_jwt = encode_entity_configuration(&op_entity_config, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/.well-known/openid_federation"))
+            .and(path("/.well-known/openid-federation"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(op_jwt)
@@ -255,7 +255,7 @@ mod tests {
         let university_config_jwt = encode_entity_configuration(&university_entity_config, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/.well-known/openid_federation"))
+            .and(path("/.well-known/openid-federation"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(university_config_jwt)
@@ -284,7 +284,7 @@ mod tests {
         let federation_config_jwt = encode_entity_configuration(&federation_entity_config, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/.well-known/openid_federation"))
+            .and(path("/.well-known/openid-federation"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(federation_config_jwt.clone())
@@ -350,7 +350,7 @@ mod tests {
         let op_jwt = encode_entity_configuration(&op_config, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/.well-known/openid_federation"))
+            .and(path("/.well-known/openid-federation"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(op_jwt)
@@ -386,7 +386,7 @@ mod tests {
         let client_jwt = encode_entity_configuration(&client_config, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/.well-known/openid_federation"))
+            .and(path("/.well-known/openid-federation"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(client_jwt)
@@ -414,7 +414,7 @@ mod tests {
         let federation_config_jwt = encode_entity_configuration(&federation_config, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/.well-known/openid_federation"))
+            .and(path("/.well-known/openid-federation"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(federation_config_jwt.clone())
