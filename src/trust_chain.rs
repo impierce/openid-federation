@@ -1,6 +1,8 @@
 //! Trust Chain structures and validation logic.
 
-use crate::{EntityConfiguration, EntityId, EntityStatement, FederationError, FederationResult, JwtProcessor};
+use crate::{
+    EntityConfiguration, EntityId, EntityStatement, FederationError, FederationResult, JwtArtifactType, JwtProcessor,
+};
 use serde::{Deserialize, Serialize};
 
 /// Trust Chain as defined in the OpenID Federation specification.
@@ -57,9 +59,11 @@ impl TrustChainValidator {
                 entity_config.validate()?;
 
                 // Verify signature using the entity's own keys
-                let verified_config: EntityConfiguration = self
-                    .jwt_processor
-                    .verify_jwt_with_jwks(jwt_string, &entity_config.jwks)?;
+                let verified_config: EntityConfiguration = self.jwt_processor.verify_jwt_with_jwks(
+                    jwt_string,
+                    &entity_config.jwks,
+                    JwtArtifactType::EntityStatement,
+                )?;
 
                 current_subject = Some(verified_config.claims.sub.clone());
                 validated_statements.push(ValidatedEntityStatement::Configuration(verified_config));
@@ -71,9 +75,11 @@ impl TrustChainValidator {
                 trust_anchor_config.validate()?;
 
                 // Verify signature using the trust anchor's own keys
-                let verified_anchor: EntityConfiguration = self
-                    .jwt_processor
-                    .verify_jwt_with_jwks(jwt_string, &trust_anchor_config.jwks)?;
+                let verified_anchor: EntityConfiguration = self.jwt_processor.verify_jwt_with_jwks(
+                    jwt_string,
+                    &trust_anchor_config.jwks,
+                    JwtArtifactType::EntityStatement,
+                )?;
 
                 validated_statements.push(ValidatedEntityStatement::Configuration(verified_anchor));
             } else {
