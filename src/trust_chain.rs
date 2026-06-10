@@ -3,6 +3,7 @@
 use crate::{
     EntityConfiguration, EntityId, EntityStatement, FederationError, FederationResult, JwtArtifactType, JwtProcessor,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Trust Chain as defined in the OpenID Federation specification.
@@ -21,6 +22,60 @@ pub struct TrustChain {
     /// Trust marks obtained from the trust chain
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_marks: Option<Vec<crate::TrustMark>>,
+}
+
+impl TrustChain {
+    /// Calculate the minimum expiration timestamp across all JWT statements in the chain.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 10.4 Calculating Trust Chain Expiration
+    /// https://openid.net/specs/openid-federation-1_0.html#name-calculating-trust-chain-expi
+    ///
+    /// # Returns
+    /// The UNIX timestamp (seconds) when the trust chain expires (the minimum of all exp claims).
+    pub fn expiration_timestamp(&self) -> FederationResult<i64> {
+        if self.chain.is_empty() {
+            return Err(FederationError::TrustChainValidation(
+                "Cannot calculate expiration of empty trust chain".to_string(),
+            ));
+        }
+
+        let jwt_processor = JwtProcessor::new();
+        let mut min_exp: Option<i64> = None;
+
+        for jwt_string in &self.chain {
+            // Extract exp claim without verification (we just need the timestamp)
+            let claims: crate::JwtClaims = jwt_processor.extract_claims_unverified(jwt_string)?;
+
+            let exp = claims.exp;
+            min_exp = Some(match min_exp {
+                None => exp,
+                Some(current_min) => current_min.min(exp),
+            });
+        }
+
+        min_exp.ok_or_else(|| {
+            FederationError::TrustChainValidation("No valid expiration time found in trust chain".to_string())
+        })
+    }
+
+    /// Check if the trust chain is expired at a given point in time.
+    ///
+    /// # Arguments
+    /// * `now` - The reference time to check expiration against
+    ///
+    /// # Returns
+    /// `true` if the chain's minimum expiration time has passed, `false` otherwise.
+    pub fn is_expired_at(&self, now: DateTime<Utc>) -> FederationResult<bool> {
+        let min_exp_timestamp = self.expiration_timestamp()?;
+        Ok(now.timestamp() >= min_exp_timestamp)
+    }
+
+    /// Check if the trust chain is expired at the current time.
+    ///
+    /// This is a convenience wrapper that uses the current UTC time.
+    pub fn is_expired(&self) -> FederationResult<bool> {
+        self.is_expired_at(Utc::now())
+    }
 }
 
 /// Trust Chain Validator for OpenID Federation.
