@@ -257,7 +257,8 @@ pub struct ValidatedTrustChain {
 }
 
 /// Validated entity statement (either a configuration or a statement).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum ValidatedEntityStatement {
     /// Entity Configuration (self-signed)
     Configuration(EntityConfiguration),
@@ -380,7 +381,8 @@ impl TrustChainResolver {
     ///
     /// # Returns
     /// A validated trust chain if resolution succeeds
-    pub async fn resolve_trust_chain(&self, entity_id: &EntityId) -> FederationResult<ValidatedTrustChain> { // Vec<TrustAnchorId>
+    pub async fn resolve_trust_chain(&self, entity_id: &EntityId) -> FederationResult<ValidatedTrustChain> {
+        // Vec<TrustAnchorId>
         // Step 1: Fetch the target entity's configuration
         let (leaf_config, leaf_jwt) = self.fetch_entity_configuration_with_jwt(entity_id).await?;
 
@@ -577,7 +579,7 @@ impl TrustChain {
 
 #[cfg(test)]
 mod tests {
-    use crate::{EntityMetadata, JwkSet};
+    use crate::{extract_claims_unverified, EntityMetadata, FederationClient, JwkSet};
 
     use super::*;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -767,7 +769,8 @@ mod tests {
             Some(vec![trust_anchor_url.clone()]),
             Some(intermediate_two_fetch_endpoint.clone()),
         );
-        let trust_anchor_config = build_entity_configuration(&trust_anchor_url, None, None);
+        let trust_anchor_config =
+            build_entity_configuration(&trust_anchor_url, None, Some(trust_anchor_fetch_endpoint));
 
         mock_entity_configuration(&leaf_server, encode_entity_configuration(&leaf_config)).await;
         mock_entity_configuration(
@@ -780,6 +783,7 @@ mod tests {
             encode_entity_configuration(&intermediate_two_config),
         )
         .await;
+        mock_entity_configuration(&trust_anchor_server, encode_entity_configuration(&trust_anchor_config)).await;
 
         mock_subordinate_statement(
             &intermediate_one_server,
@@ -796,6 +800,12 @@ mod tests {
             )),
         )
         .await;
+        mock_subordinate_statement(
+            &trust_anchor_server,
+            &intermediate_two_url,
+            encode_entity_statement(&build_subordinate_statement(&trust_anchor_url, &intermediate_two_url)),
+        )
+        .await;
 
         let mut resolver = TrustChainResolver::new();
         resolver.add_trusted_anchor(
@@ -803,62 +813,112 @@ mod tests {
             encode_entity_configuration(&trust_anchor_config),
         );
 
-        let validated = resolver
-            .resolve_trust_chain(&leaf_url)
+        let fed_client = FederationClient::new();
+
+        let validated_trustchain = fed_client
+            .discover_trust_chain(&leaf_url, &[trust_anchor_url])
             .await
             .expect("trust chain should resolve");
 
-        assert_eq!(validated.leaf_entity_id, leaf_url);
-        assert_eq!(validated.trust_anchor_id, trust_anchor_url);
-        assert_eq!(validated.statements.len(), 4);
-        assert_eq!(validated.intermediate_statements().len(), 2);
-        assert_eq!(validated.leaf_entity().unwrap().claims.sub, leaf_url);
-        assert_eq!(validated.trust_anchor().unwrap().claims.sub, trust_anchor_url);
+        // Pedantic checks: only the leaf and trust anchor are configurations.
+        assert_eq!(
+            validated_trustchain.chain.len(),
+            5,
+            "Chain must have 5 statements (leaf config + 3 subordinate statements + anchor config)"
+        );
+        let leaf = extract_claims_unverified::<EntityConfiguration>(&validated_trustchain.chain[0]).unwrap();
+        assert_eq!(leaf.claims.sub, leaf.claims.iss);
+        for statement in validated_trustchain.chain.iter().take(4).skip(1) {
+            let statement = extract_claims_unverified::<EntityStatement>(statement).unwrap();
+            assert_ne!(statement.claims.sub, statement.claims.iss);
+        }
+        let anchor = extract_claims_unverified::<EntityConfiguration>(&validated_trustchain.chain[4]).unwrap();
+        assert_eq!(anchor.claims.sub, anchor.claims.iss);
+        for statement in &validated_trustchain.chain {
+            let statement = extract_claims_unverified::<ValidatedEntityStatement>(statement).unwrap();
+            match statement {
+                ValidatedEntityStatement::Configuration(config) => {
+                    assert!(!config.jwks.keys.is_empty(), "Configuration must have non-empty JWKS");
+                }
+                ValidatedEntityStatement::Statement(statement) => {
+                    assert!(
+                        statement.jwks.is_some() && !statement.jwks.unwrap().keys.is_empty(),
+                        "Statement must have non-empty JWKS"
+                    );
+                }
+            }
+        }
     }
 
     #[tokio::test]
     async fn resolve_trust_chain_with_leaf_and_trust_anchor_only() {
         let leaf_server = MockServer::start().await;
+        let trust_anchor_server = MockServer::start().await;
 
         let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
-        let trust_anchor_url = Url::parse("https://anchor.example.test").unwrap();
+        let trust_anchor_url = Url::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
 
         let leaf_config = build_entity_configuration(
             &leaf_url,
             Some(vec![trust_anchor_url.clone()]),
             Some(build_fetch_endpoint(&leaf_url)),
         );
-        let trust_anchor_config = build_entity_configuration(&trust_anchor_url, None, None);
+        let trust_anchor_config =
+            build_entity_configuration(&trust_anchor_url, None, Some(build_fetch_endpoint(&trust_anchor_url)));
 
         mock_entity_configuration(&leaf_server, encode_entity_configuration(&leaf_config)).await;
+        mock_entity_configuration(&trust_anchor_server, encode_entity_configuration(&trust_anchor_config)).await;
+        mock_subordinate_statement(
+            &trust_anchor_server,
+            &leaf_url,
+            encode_entity_statement(&build_subordinate_statement(&trust_anchor_url, &leaf_url)),
+        )
+        .await;
 
-        let mut resolver = TrustChainResolver::new();
-        resolver.add_trusted_anchor(
-            trust_anchor_config.clone(),
-            encode_entity_configuration(&trust_anchor_config),
-        );
+        let fed_client = FederationClient::new();
 
-        let validated = resolver
-            .resolve_trust_chain(&leaf_url)
+        let validated_trustchain = fed_client
+            .discover_trust_chain(&leaf_url, &[trust_anchor_url])
             .await
             .expect("trust chain should resolve");
 
-        assert_eq!(validated.leaf_entity_id, leaf_url);
-        assert_eq!(validated.trust_anchor_id, trust_anchor_url);
-        assert_eq!(validated.statements.len(), 2);
-        assert_eq!(validated.intermediate_statements().len(), 0);
-        assert_eq!(validated.leaf_entity().unwrap().claims.sub, leaf_url);
-        assert_eq!(validated.trust_anchor().unwrap().claims.sub, trust_anchor_url);
+        // Must be exactly 3 statements: leaf config + subordinate statement + anchor config
+        assert_eq!(
+            validated_trustchain.chain.len(),
+            3,
+            "Minimal chain must have 3 statements"
+        );
+        let leaf = extract_claims_unverified::<EntityConfiguration>(&validated_trustchain.chain[0]).unwrap();
+        assert_eq!(leaf.claims.sub, leaf.claims.iss);
+        let statement = extract_claims_unverified::<EntityStatement>(&validated_trustchain.chain[1]).unwrap();
+        assert_ne!(statement.claims.sub, statement.claims.iss);
+        let anchor = extract_claims_unverified::<EntityConfiguration>(&validated_trustchain.chain[2]).unwrap();
+        assert_eq!(anchor.claims.sub, anchor.claims.iss);
+        for statement in &validated_trustchain.chain {
+            let statement = extract_claims_unverified::<ValidatedEntityStatement>(statement).unwrap();
+            match statement {
+                ValidatedEntityStatement::Configuration(config) => {
+                    assert!(!config.jwks.keys.is_empty(), "Configuration must have non-empty JWKS");
+                }
+                ValidatedEntityStatement::Statement(statement) => {
+                    assert!(
+                        statement.jwks.is_some() && !statement.jwks.unwrap().keys.is_empty(),
+                        "Statement must have non-empty JWKS"
+                    );
+                }
+            }
+        }
     }
 
     #[tokio::test]
     async fn resolve_trust_chain_fails_when_sub_query_param_is_wrong() {
         let leaf_server = MockServer::start().await;
         let intermediate_server = MockServer::start().await;
+        let trust_anchor_server = MockServer::start().await;
 
         let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
         let intermediate_url = Url::parse(&format!("http://{}", intermediate_server.address())).unwrap();
-        let trust_anchor_url = Url::parse("https://anchor.example.test").unwrap();
+        let trust_anchor_url = Url::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
 
         let leaf_config = build_entity_configuration(
             &leaf_url,
@@ -870,10 +930,12 @@ mod tests {
             Some(vec![trust_anchor_url.clone()]),
             Some(build_fetch_endpoint(&intermediate_url)),
         );
-        let trust_anchor_config = build_entity_configuration(&trust_anchor_url, None, None);
+        let trust_anchor_config =
+            build_entity_configuration(&trust_anchor_url, None, Some(build_fetch_endpoint(&trust_anchor_url)));
 
         mock_entity_configuration(&leaf_server, encode_entity_configuration(&leaf_config)).await;
         mock_entity_configuration(&intermediate_server, encode_entity_configuration(&intermediate_config)).await;
+        mock_entity_configuration(&trust_anchor_server, encode_entity_configuration(&trust_anchor_config)).await;
 
         // Deliberately register a mismatching `sub` to prove the resolver must send the exact query.
         let wrong_subject = Url::parse("https://wrong.example.test").unwrap();
@@ -883,18 +945,25 @@ mod tests {
             encode_entity_statement(&build_subordinate_statement(&intermediate_url, &leaf_url)),
         )
         .await;
+        mock_subordinate_statement(
+            &trust_anchor_server,
+            &intermediate_url,
+            encode_entity_statement(&build_subordinate_statement(&trust_anchor_url, &intermediate_url)),
+        )
+        .await;
 
-        let mut resolver = TrustChainResolver::new();
-        resolver.add_trusted_anchor(
-            trust_anchor_config.clone(),
-            encode_entity_configuration(&trust_anchor_config),
-        );
+        let fed_client = FederationClient::new();
 
-        let err = resolver.resolve_trust_chain(&leaf_url).await.unwrap_err();
+        let err = fed_client
+            .discover_trust_chain(&leaf_url, &[trust_anchor_url])
+            .await
+            .unwrap_err();
+
+        println!("error === {:?}", err); // TODO:
+
         match err {
             FederationError::EntityResolution(message) => {
-                assert!(message.contains("Failed to fetch subordinate statement"));
-                assert!(message.contains("404"));
+                assert!(message.contains("No superior for"));
             }
             other => panic!("expected EntityResolution error, got: {:?}", other),
         }

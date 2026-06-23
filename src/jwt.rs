@@ -268,6 +268,18 @@ impl JwtProcessor {
     }
 }
 
+/// Extract claims from a JWT without verification (for inspection purposes only).
+pub fn extract_claims_unverified<T: for<'de> Deserialize<'de>>(token: &str) -> FederationResult<T> {
+    let mut validation = Validation::default();
+    validation.insecure_disable_signature_validation();
+    validation.validate_exp = false;
+    validation.validate_nbf = false;
+
+    decode::<T>(token, &DecodingKey::from_secret(&[]), &validation)
+        .map(|token_data| token_data.claims)
+        .map_err(FederationError::from)
+}
+
 impl Default for JwtProcessor {
     fn default() -> Self {
         Self::new()

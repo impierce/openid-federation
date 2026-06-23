@@ -214,11 +214,16 @@ impl FederationClient {
             let config_jwt = self.fetch_entity_configuration(entity_id).await?;
             let config: EntityConfiguration = JwtProcessor::new().extract_claims_unverified(&config_jwt)?;
 
-            // Add this entity's configuration to the chain
-            chain.push(config_jwt);
+            let is_root = chain.is_empty();
+            let is_trusted_anchor = trusted_anchors.contains(entity_id);
+
+            // Keep only the leaf and trust anchor configurations in the final chain.
+            if is_root || is_trusted_anchor {
+                chain.push(config_jwt);
+            }
 
             // Check if this entity is a trusted anchor
-            if trusted_anchors.contains(entity_id) {
+            if is_trusted_anchor {
                 return Ok(());
             }
 
@@ -258,8 +263,10 @@ impl FederationClient {
                         .fetch_entity_statement(&fetch_endpoint, superior_id, entity_id)
                         .await
                     {
-                        // Insert the subordinate statement at the beginning (before current entity's config)
-                        chain.insert(chain.len() - 1, subordinate_jwt);
+                        let rollback_len = chain.len();
+
+                        // Append the subordinate statement for the current hop.
+                        chain.push(subordinate_jwt);
 
                         // Recursively discover from the superior
                         match self
@@ -268,10 +275,8 @@ impl FederationClient {
                         {
                             Ok(()) => return Ok(()),
                             Err(_) => {
-                                // Remove this superior from chain and try next one
-                                if chain.len() >= 2 {
-                                    chain.remove(chain.len() - 2);
-                                }
+                                // Restore the chain to its previous state and try the next superior.
+                                chain.truncate(rollback_len);
                                 continue;
                             }
                         }
