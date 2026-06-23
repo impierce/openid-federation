@@ -240,7 +240,7 @@ impl JwtProcessor {
             }
         }
 
-        // If no kid or key not found, try all signature keys
+        // If no kid or key not found, try all signature keys // TODO: is this desired behavior? especially an incorrect KID would probably rather just fail no?
         let signature_keys = jwks.signature_keys();
         for jwk in signature_keys {
             if let Ok(decoding_key) = jwk.to_decoding_key() {

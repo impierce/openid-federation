@@ -1,10 +1,16 @@
 //! Trust Chain structures and validation logic.
+//!
+//! This module provides both Push and Pull methods for trust chain construction:
+//! - **Push method**: Validates a pre-compiled trust chain (provided inline)
+//! - **Pull method**: Dynamically resolves a trust chain from public endpoints given an entity ID
 
 use crate::{
     EntityConfiguration, EntityId, EntityStatement, FederationError, FederationResult, JwtArtifactType, JwtProcessor,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use url::Url;
 
 /// Trust Chain as defined in the OpenID Federation specification.
 ///
@@ -151,9 +157,11 @@ impl TrustChainValidator {
                         ));
                     }
                 }
+                // TODO: else error no?
 
                 // For now, we'll store the unverified statement
                 // In a full implementation, we'd verify it against the issuer's keys
+                // TODO: why cant we verify the signature like the other match arms?
                 current_subject = Some(entity_statement.claims.iss.clone());
                 validated_statements.push(ValidatedEntityStatement::Statement(entity_statement));
             }
@@ -170,6 +178,7 @@ impl TrustChainValidator {
     }
 
     /// Validate that the trust chain statements are properly linked.
+    /// TODO: also check beginning and end if they are entity configurations
     fn validate_chain_linkage(&self, statements: &[ValidatedEntityStatement]) -> FederationResult<()> {
         if statements.len() < 2 {
             return Err(FederationError::TrustChainValidation(
@@ -178,32 +187,32 @@ impl TrustChainValidator {
         }
 
         for i in 0..(statements.len() - 1) {
-            let _current_entity_id = match &statements[i] {
-                ValidatedEntityStatement::Configuration(config) => &config.claims.sub,
-                ValidatedEntityStatement::Statement(stmt) => &stmt.claims.sub,
-            };
-
-            let next_issuer_id = match &statements[i + 1] {
-                ValidatedEntityStatement::Configuration(config) => &config.claims.iss,
-                ValidatedEntityStatement::Statement(stmt) => &stmt.claims.iss,
-            };
-
-            // For intermediate statements, the subject of the current statement
-            // should match the issuer of the next statement (when going up the chain)
-            if i > 0 {
-                let current_issuer_id = match &statements[i] {
-                    ValidatedEntityStatement::Configuration(_) => {
+            let current_entity_id = match &statements[i] {
+                ValidatedEntityStatement::Configuration(config) => {
+                    if i != 0 {
                         return Err(FederationError::TrustChainValidation(
                             "Entity configuration can only be at the beginning or end of chain".to_string(),
                         ));
                     }
-                    ValidatedEntityStatement::Statement(stmt) => &stmt.claims.iss,
-                };
+                    &config.claims.sub
+                }
+                ValidatedEntityStatement::Statement(stmt) => &stmt.claims.iss,
+            };
 
-                if current_issuer_id != next_issuer_id {
-                    return Err(FederationError::TrustChainValidation(
-                        "Trust chain is not properly linked".to_string(),
-                    ));
+            match &statements[i + 1] {
+                ValidatedEntityStatement::Statement(next_stmt) => {
+                    if &next_stmt.claims.sub != current_entity_id {
+                        return Err(FederationError::TrustChainValidation(
+                            "Trust chain is not properly linked".to_string(),
+                        ));
+                    }
+                }
+                ValidatedEntityStatement::Configuration(_) => {
+                    if i + 1 != statements.len() - 1 {
+                        return Err(FederationError::TrustChainValidation(
+                            "Entity configuration can only be at the beginning or end of chain".to_string(),
+                        ));
+                    }
                 }
             }
         }
@@ -225,7 +234,7 @@ impl TrustChainValidator {
         match statements.last() {
             Some(ValidatedEntityStatement::Configuration(config)) => Ok(config.claims.iss.clone()),
             Some(ValidatedEntityStatement::Statement(stmt)) => Ok(stmt.claims.iss.clone()),
-            None => Err(FederationError::TrustChainValidation("Empty trust chain".to_string())),
+            None => Err(FederationError::TrustChainValidation("Empty trust chain".to_string())), // Here its an error if its empy but in `ValidatedTrustChain` its not, should be the same behavior.
         }
     }
 }
@@ -261,7 +270,7 @@ impl ValidatedTrustChain {
     pub fn leaf_entity(&self) -> Option<&EntityConfiguration> {
         match self.statements.first() {
             Some(ValidatedEntityStatement::Configuration(config)) => Some(config),
-            _ => None,
+            _ => None, // TODO: this is different behavior than the `get_leaf_entity_id` when empty
         }
     }
 
@@ -269,7 +278,7 @@ impl ValidatedTrustChain {
     pub fn trust_anchor(&self) -> Option<&EntityConfiguration> {
         match self.statements.last() {
             Some(ValidatedEntityStatement::Configuration(config)) => Some(config),
-            _ => None,
+            _ => None, // TODO same here
         }
     }
 
@@ -281,7 +290,7 @@ impl ValidatedTrustChain {
             .take(self.statements.len().saturating_sub(2)) // Take all except trust anchor
             .filter_map(|stmt| match stmt {
                 ValidatedEntityStatement::Statement(s) => Some(s),
-                _ => None,
+                _ => None, // TODO: same here
             })
             .collect()
     }
@@ -325,6 +334,221 @@ impl ValidatedTrustChain {
     }
 }
 
+/// Trust Chain Resolver for the Pull method.
+///
+/// This struct implements dynamic trust chain resolution as defined in OpenID Federation 1.0.
+/// Starting with only an entity ID, it fetches configurations and statements from public
+/// endpoints to build a complete trust chain up to a known trust anchor.
+///
+/// Reference: OpenID Federation 1.0 - Section 4.1 Trust Chain Resolution
+/// https://openid.net/specs/openid-federation-1_0.html#name-trust-chain-resolution
+pub struct TrustChainResolver {
+    http_client: reqwest::Client,
+    jwt_processor: JwtProcessor,
+    /// Set of known trust anchor entity IDs that are already trusted
+    /// Maps entity_id -> (EntityConfiguration, JWT string)
+    trusted_anchors: HashMap<EntityId, (EntityConfiguration, String)>,
+}
+
+impl TrustChainResolver {
+    /// Create a new trust chain resolver.
+    pub fn new() -> Self {
+        Self {
+            http_client: reqwest::Client::new(),
+            jwt_processor: JwtProcessor::new(),
+            trusted_anchors: HashMap::new(),
+        }
+    }
+
+    /// Add a known trusted anchor with its JWT representation.
+    pub fn add_trusted_anchor(&mut self, anchor_config: EntityConfiguration, anchor_jwt: String) {
+        self.trusted_anchors
+            .insert(anchor_config.claims.iss.clone(), (anchor_config, anchor_jwt));
+    }
+
+    /// Resolve a trust chain for an entity starting from its entity ID.
+    ///
+    /// This implements the Pull method: given an entity ID (URL), this method:
+    /// 1. Fetches the entity's configuration from `/.well-known/openid-federation`
+    /// 2. Extracts `authority_hints` from each entity configuration to find superior entities
+    /// 3. For each authority, fetches its configuration and `federation_fetch_endpoint`
+    /// 4. Queries the endpoint to get subordinate statements
+    /// 5. Continues up the chain until reaching a known trust anchor
+    ///
+    /// # Arguments
+    /// * `entity_id` - The entity ID (URL) to resolve the trust chain for
+    ///
+    /// # Returns
+    /// A validated trust chain if resolution succeeds
+    pub async fn resolve_trust_chain(&self, entity_id: &EntityId) -> FederationResult<ValidatedTrustChain> { // Vec<TrustAnchorId>
+        // Step 1: Fetch the target entity's configuration
+        let (leaf_config, leaf_jwt) = self.fetch_entity_configuration_with_jwt(entity_id).await?;
+
+        // Step 2: Initialize chain with the leaf entity's configuration JWT
+        let mut chain_jws = vec![leaf_jwt];
+
+        // Step 3: Get authority hints from the leaf configuration
+        let authority_hints = leaf_config.authority_hints.as_ref().ok_or_else(|| {
+            FederationError::EntityResolution("No authority hints found in leaf entity configuration".to_string())
+        })?;
+
+        if authority_hints.is_empty() {
+            return Err(FederationError::EntityResolution(
+                "Authority hints cannot be empty".to_string(),
+            ));
+        }
+
+        // Step 4: Build the chain upward
+        let mut current_subject = entity_id.clone();
+        let mut current_authorities = authority_hints.clone();
+
+        loop {
+            // Check if any of the current authorities is a known trust anchor
+            let mut found_anchor = false;
+
+            for authority_id in &current_authorities {
+                if let Some((_anchor_config, anchor_jwt)) = self.trusted_anchors.get(authority_id) {
+                    // Found a known anchor - add it to chain and finish
+                    chain_jws.push(anchor_jwt.clone());
+                    found_anchor = true;
+                    break;
+                }
+            }
+
+            if found_anchor {
+                break;
+            }
+
+            // None of the current authorities is a known anchor, so we need to fetch subordinate statements
+            if current_authorities.len() != 1 {
+                return Err(FederationError::EntityResolution(
+                    "Expected exactly one authority at this level (or a known anchor)".to_string(),
+                ));
+            }
+
+            let authority_id = current_authorities.first().unwrap().clone();
+
+            // Fetch the authority's configuration
+            let (authority_config, _authority_jwt) = self.fetch_entity_configuration_with_jwt(&authority_id).await?;
+
+            // The next hop must come from the authority's configuration, not from the subordinate statement.
+            current_authorities = authority_config
+                .authority_hints
+                .as_ref()
+                .ok_or_else(|| {
+                    FederationError::EntityResolution(format!(
+                        "No authority hints found in authority configuration for {}",
+                        authority_id
+                    ))
+                })?
+                .clone();
+
+            if current_authorities.is_empty() {
+                return Err(FederationError::EntityResolution(
+                    "Authority hints cannot be empty in authority configuration".to_string(),
+                ));
+            }
+
+            // Get the federation_fetch_endpoint from the authority's metadata
+            let federation_fetch_endpoint = authority_config
+                .metadata
+                .as_ref()
+                .and_then(|m| m.federation_entity.as_ref())
+                .and_then(|fe| fe.federation_fetch_endpoint.clone())
+                .ok_or_else(|| {
+                    FederationError::EntityResolution(format!(
+                        "Authority {} does not have a federation_fetch_endpoint",
+                        authority_id
+                    ))
+                })?;
+
+            // Fetch the subordinate statement for the current subject
+            let subordinate_statement_jwt = self
+                .fetch_subordinate_statement(&federation_fetch_endpoint, &current_subject)
+                .await?;
+
+            let subordinate_statement: EntityStatement = self
+                .jwt_processor
+                .extract_claims_unverified(&subordinate_statement_jwt)?;
+
+            // Validate the subordinate statement
+            subordinate_statement.validate()?;
+
+            // Add to chain
+            chain_jws.push(subordinate_statement_jwt);
+
+            // Move up: the issuer of this statement becomes the current subject for the next iteration
+            current_subject = subordinate_statement.claims.iss.clone();
+        }
+
+        // Step 5: Validate the complete trust chain
+        let trust_chain = TrustChain::new(chain_jws);
+        let validator = TrustChainValidator::new();
+        validator.validate_trust_chain(&trust_chain)
+    }
+
+    /// Fetch an entity's configuration from its well-known endpoint, returning both the config and JWT string.
+    async fn fetch_entity_configuration_with_jwt(
+        &self,
+        entity_id: &EntityId,
+    ) -> FederationResult<(EntityConfiguration, String)> {
+        let well_known_url = self.get_well_known_url(entity_id)?;
+
+        let response = self.http_client.get(well_known_url).send().await?;
+
+        if !response.status().is_success() {
+            return Err(FederationError::EntityResolution(format!(
+                "Failed to fetch entity configuration: HTTP {}",
+                response.status()
+            )));
+        }
+
+        let entity_config_jwt = response.text().await?;
+
+        let entity_config: EntityConfiguration = self.jwt_processor.extract_claims_unverified(&entity_config_jwt)?;
+
+        Ok((entity_config, entity_config_jwt))
+    }
+
+    /// Fetch a subordinate statement from an authority's federation_fetch_endpoint.
+    async fn fetch_subordinate_statement(
+        &self,
+        federation_fetch_endpoint: &Url,
+        subject_entity_id: &EntityId,
+    ) -> FederationResult<String> {
+        let mut url = federation_fetch_endpoint.clone();
+        url.query_pairs_mut().append_pair("sub", subject_entity_id.as_str());
+
+        let response = self.http_client.get(url).send().await?;
+
+        if !response.status().is_success() {
+            return Err(FederationError::EntityResolution(format!(
+                "Failed to fetch subordinate statement: HTTP {}",
+                response.status()
+            )));
+        }
+
+        response.text().await.map_err(FederationError::Http)
+    }
+
+    /// Build the well-known endpoint URL for an entity.
+    fn get_well_known_url(&self, entity_id: &EntityId) -> FederationResult<Url> {
+        let mut url = entity_id.clone();
+
+        // Remove any existing path and query
+        url.set_path("/.well-known/openid-federation");
+        url.set_query(None);
+
+        Ok(url)
+    }
+}
+
+impl Default for TrustChainResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TrustChain {
     /// Create a new trust chain.
     pub fn new(chain: Vec<String>) -> Self {
@@ -348,5 +572,331 @@ impl TrustChain {
     /// Check if the chain is empty.
     pub fn is_empty(&self) -> bool {
         self.chain.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{EntityMetadata, JwkSet};
+
+    use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use chrono::Duration;
+    use jsonwebtoken::{Algorithm, EncodingKey};
+    use wiremock::{
+        matchers::{method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    const TEST_SECRET: &str = "your-256-bit-secret-key-here-minimum-32-bytes!!!!";
+
+    fn test_encoding_key() -> EncodingKey {
+        EncodingKey::from_secret(TEST_SECRET.as_bytes())
+    }
+
+    fn test_jwk_set() -> JwkSet {
+        let mut jwks = JwkSet::new();
+        jwks.add_key(crate::Jwk {
+            kty: "oct".to_string(),
+            use_: Some("sig".to_string()),
+            key_ops: None,
+            alg: Some("HS256".to_string()),
+            kid: Some("test-key".to_string()),
+            x5u: None,
+            x5c: None,
+            x5t: None,
+            x5t_s256: None,
+            n: None,
+            e: None,
+            d: None,
+            p: None,
+            q: None,
+            dp: None,
+            dq: None,
+            qi: None,
+            crv: None,
+            x: None,
+            y: None,
+            k: Some(URL_SAFE_NO_PAD.encode(TEST_SECRET.as_bytes())),
+        });
+        jwks
+    }
+
+    fn future_expiration() -> i64 {
+        (chrono::Utc::now() + Duration::hours(1)).timestamp()
+    }
+
+    fn build_federation_metadata(fetch_endpoint: Url) -> EntityMetadata {
+        let mut metadata = EntityMetadata::new();
+        metadata.federation_entity = Some(crate::FederationEntityMetadata {
+            organization_name: Some("Test Federation".to_string()),
+            homepage_uri: None,
+            policy_uri: None,
+            logo_uri: None,
+            contacts: None,
+            federation_fetch_endpoint: Some(fetch_endpoint),
+            federation_list_endpoint: None,
+            federation_resolve_endpoint: None,
+            federation_trust_mark_status_endpoint: None,
+            federation_historical_keys_endpoint: None,
+        });
+        metadata
+    }
+
+    fn build_entity_configuration(
+        entity_id: &Url,
+        authority_hints: Option<Vec<Url>>,
+        fetch_endpoint: Option<Url>,
+    ) -> EntityConfiguration {
+        let mut config = EntityConfiguration::new(
+            entity_id.clone(),
+            test_jwk_set(),
+            future_expiration(),
+            chrono::Utc::now().timestamp(),
+        );
+
+        if let Some(hints) = authority_hints {
+            config.authority_hints = Some(hints);
+        }
+
+        if let Some(endpoint) = fetch_endpoint {
+            config.metadata = Some(build_federation_metadata(endpoint));
+        }
+
+        config
+    }
+
+    fn build_subordinate_statement(issuer: &Url, subject: &Url) -> EntityStatement {
+        EntityStatement::new(
+            issuer.clone(),
+            subject.clone(),
+            future_expiration(),
+            chrono::Utc::now().timestamp(),
+        )
+        .with_jwks(test_jwk_set())
+    }
+
+    fn build_fetch_endpoint(entity_id: &Url) -> Url {
+        let mut endpoint = entity_id.clone();
+        endpoint.set_path("/fetch");
+        endpoint.set_query(None);
+        endpoint
+    }
+
+    fn encode_entity_configuration(config: &EntityConfiguration) -> String {
+        let processor = JwtProcessor::new();
+        processor
+            .sign_jwt(
+                config,
+                &test_encoding_key(),
+                Algorithm::HS256,
+                JwtArtifactType::EntityStatement,
+                Some("test-key".to_string()),
+            )
+            .expect("entity configuration JWT should sign")
+    }
+
+    fn encode_entity_statement(statement: &EntityStatement) -> String {
+        let processor = JwtProcessor::new();
+        processor
+            .sign_jwt(
+                statement,
+                &test_encoding_key(),
+                Algorithm::HS256,
+                JwtArtifactType::EntityStatement,
+                Some("test-key".to_string()),
+            )
+            .expect("entity statement JWT should sign")
+    }
+
+    async fn mock_entity_configuration(server: &MockServer, jwt: String) {
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-federation"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(jwt)
+                    .insert_header("content-type", "application/entity-statement+jwt"),
+            )
+            .mount(server)
+            .await;
+    }
+
+    async fn mock_subordinate_statement(server: &MockServer, subject: &Url, jwt: String) {
+        Mock::given(method("GET"))
+            .and(path("/fetch"))
+            .and(query_param("sub", subject.as_str()))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(jwt)
+                    .insert_header("content-type", "application/entity-statement+jwt"),
+            )
+            .mount(server)
+            .await;
+    }
+
+    // TODO: something is def still wrong since this test doesnt add an entity config for the trust anchor, neither does it fetch it, but this absolutely mandatory by the spec, or not?
+    #[tokio::test]
+    async fn resolve_trust_chain_with_two_intermediates() {
+        let leaf_server = MockServer::start().await;
+        let intermediate_one_server = MockServer::start().await;
+        let intermediate_two_server = MockServer::start().await;
+        let trust_anchor_server = MockServer::start().await;
+
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let intermediate_one_url = Url::parse(&format!("http://{}", intermediate_one_server.address())).unwrap();
+        let intermediate_two_url = Url::parse(&format!("http://{}", intermediate_two_server.address())).unwrap();
+        let trust_anchor_url = Url::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
+
+        let leaf_fetch_endpoint = build_fetch_endpoint(&leaf_url);
+        let intermediate_one_fetch_endpoint = build_fetch_endpoint(&intermediate_one_url);
+        let intermediate_two_fetch_endpoint = build_fetch_endpoint(&intermediate_two_url);
+        let trust_anchor_fetch_endpoint = build_fetch_endpoint(&trust_anchor_url);
+
+        let leaf_config = build_entity_configuration(
+            &leaf_url,
+            Some(vec![intermediate_one_url.clone()]),
+            Some(leaf_fetch_endpoint),
+        );
+        let intermediate_one_config = build_entity_configuration(
+            &intermediate_one_url,
+            Some(vec![intermediate_two_url.clone()]),
+            Some(intermediate_one_fetch_endpoint.clone()),
+        );
+        let intermediate_two_config = build_entity_configuration(
+            &intermediate_two_url,
+            Some(vec![trust_anchor_url.clone()]),
+            Some(intermediate_two_fetch_endpoint.clone()),
+        );
+        let trust_anchor_config = build_entity_configuration(&trust_anchor_url, None, None);
+
+        mock_entity_configuration(&leaf_server, encode_entity_configuration(&leaf_config)).await;
+        mock_entity_configuration(
+            &intermediate_one_server,
+            encode_entity_configuration(&intermediate_one_config),
+        )
+        .await;
+        mock_entity_configuration(
+            &intermediate_two_server,
+            encode_entity_configuration(&intermediate_two_config),
+        )
+        .await;
+
+        mock_subordinate_statement(
+            &intermediate_one_server,
+            &leaf_url,
+            encode_entity_statement(&build_subordinate_statement(&intermediate_one_url, &leaf_url)),
+        )
+        .await;
+        mock_subordinate_statement(
+            &intermediate_two_server,
+            &intermediate_one_url,
+            encode_entity_statement(&build_subordinate_statement(
+                &intermediate_two_url,
+                &intermediate_one_url,
+            )),
+        )
+        .await;
+
+        let mut resolver = TrustChainResolver::new();
+        resolver.add_trusted_anchor(
+            trust_anchor_config.clone(),
+            encode_entity_configuration(&trust_anchor_config),
+        );
+
+        let validated = resolver
+            .resolve_trust_chain(&leaf_url)
+            .await
+            .expect("trust chain should resolve");
+
+        assert_eq!(validated.leaf_entity_id, leaf_url);
+        assert_eq!(validated.trust_anchor_id, trust_anchor_url);
+        assert_eq!(validated.statements.len(), 4);
+        assert_eq!(validated.intermediate_statements().len(), 2);
+        assert_eq!(validated.leaf_entity().unwrap().claims.sub, leaf_url);
+        assert_eq!(validated.trust_anchor().unwrap().claims.sub, trust_anchor_url);
+    }
+
+    #[tokio::test]
+    async fn resolve_trust_chain_with_leaf_and_trust_anchor_only() {
+        let leaf_server = MockServer::start().await;
+
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let trust_anchor_url = Url::parse("https://anchor.example.test").unwrap();
+
+        let leaf_config = build_entity_configuration(
+            &leaf_url,
+            Some(vec![trust_anchor_url.clone()]),
+            Some(build_fetch_endpoint(&leaf_url)),
+        );
+        let trust_anchor_config = build_entity_configuration(&trust_anchor_url, None, None);
+
+        mock_entity_configuration(&leaf_server, encode_entity_configuration(&leaf_config)).await;
+
+        let mut resolver = TrustChainResolver::new();
+        resolver.add_trusted_anchor(
+            trust_anchor_config.clone(),
+            encode_entity_configuration(&trust_anchor_config),
+        );
+
+        let validated = resolver
+            .resolve_trust_chain(&leaf_url)
+            .await
+            .expect("trust chain should resolve");
+
+        assert_eq!(validated.leaf_entity_id, leaf_url);
+        assert_eq!(validated.trust_anchor_id, trust_anchor_url);
+        assert_eq!(validated.statements.len(), 2);
+        assert_eq!(validated.intermediate_statements().len(), 0);
+        assert_eq!(validated.leaf_entity().unwrap().claims.sub, leaf_url);
+        assert_eq!(validated.trust_anchor().unwrap().claims.sub, trust_anchor_url);
+    }
+
+    #[tokio::test]
+    async fn resolve_trust_chain_fails_when_sub_query_param_is_wrong() {
+        let leaf_server = MockServer::start().await;
+        let intermediate_server = MockServer::start().await;
+
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let intermediate_url = Url::parse(&format!("http://{}", intermediate_server.address())).unwrap();
+        let trust_anchor_url = Url::parse("https://anchor.example.test").unwrap();
+
+        let leaf_config = build_entity_configuration(
+            &leaf_url,
+            Some(vec![intermediate_url.clone()]),
+            Some(build_fetch_endpoint(&leaf_url)),
+        );
+        let intermediate_config = build_entity_configuration(
+            &intermediate_url,
+            Some(vec![trust_anchor_url.clone()]),
+            Some(build_fetch_endpoint(&intermediate_url)),
+        );
+        let trust_anchor_config = build_entity_configuration(&trust_anchor_url, None, None);
+
+        mock_entity_configuration(&leaf_server, encode_entity_configuration(&leaf_config)).await;
+        mock_entity_configuration(&intermediate_server, encode_entity_configuration(&intermediate_config)).await;
+
+        // Deliberately register a mismatching `sub` to prove the resolver must send the exact query.
+        let wrong_subject = Url::parse("https://wrong.example.test").unwrap();
+        mock_subordinate_statement(
+            &intermediate_server,
+            &wrong_subject,
+            encode_entity_statement(&build_subordinate_statement(&intermediate_url, &leaf_url)),
+        )
+        .await;
+
+        let mut resolver = TrustChainResolver::new();
+        resolver.add_trusted_anchor(
+            trust_anchor_config.clone(),
+            encode_entity_configuration(&trust_anchor_config),
+        );
+
+        let err = resolver.resolve_trust_chain(&leaf_url).await.unwrap_err();
+        match err {
+            FederationError::EntityResolution(message) => {
+                assert!(message.contains("Failed to fetch subordinate statement"));
+                assert!(message.contains("404"));
+            }
+            other => panic!("expected EntityResolution error, got: {:?}", other),
+        }
     }
 }
