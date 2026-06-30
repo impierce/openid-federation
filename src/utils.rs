@@ -129,6 +129,18 @@ impl FederationClient {
         self.http_client.fetch_text(url).await
     }
 
+    /// Fetch a subordinate statement from an authority's federation_fetch_endpoint.
+    pub async fn fetch_subordinate_statement(
+        &self,
+        federation_fetch_endpoint: &Url,
+        subject_entity_id: &EntityId,
+    ) -> FederationResult<String> {
+        let mut url = federation_fetch_endpoint.clone();
+        url.query_pairs_mut().append_pair("sub", subject_entity_id.as_str());
+
+        self.http_client.fetch_text(url).await
+    }
+
     /// List entities from a federation list endpoint.
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.3 Federation List Endpoint

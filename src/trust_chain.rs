@@ -5,12 +5,12 @@
 //! - **Pull method**: Dynamically resolves a trust chain from public endpoints given an entity ID
 
 use crate::{
-    EntityConfiguration, EntityId, EntityStatement, FederationError, FederationResult, JwtArtifactType, JwtProcessor,
+    EntityConfiguration, EntityId, EntityStatement, FederationClient, FederationError, FederationResult,
+    JwtArtifactType, JwtProcessor,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use url::Url;
 
 /// Trust Chain as defined in the OpenID Federation specification.
 ///
@@ -344,7 +344,7 @@ impl ValidatedTrustChain {
 /// Reference: OpenID Federation 1.0 - Section 4.1 Trust Chain Resolution
 /// https://openid.net/specs/openid-federation-1_0.html#name-trust-chain-resolution
 pub struct TrustChainResolver {
-    http_client: reqwest::Client,
+    http_client: FederationClient,
     jwt_processor: JwtProcessor,
     /// Set of known trust anchor entity IDs that are already trusted
     /// Maps entity_id -> (EntityConfiguration, JWT string)
@@ -355,7 +355,7 @@ impl TrustChainResolver {
     /// Create a new trust chain resolver.
     pub fn new() -> Self {
         Self {
-            http_client: reqwest::Client::new(),
+            http_client: FederationClient::new(),
             jwt_processor: JwtProcessor::new(),
             trusted_anchors: HashMap::new(),
         }
@@ -384,7 +384,8 @@ impl TrustChainResolver {
     pub async fn resolve_trust_chain(&self, entity_id: &EntityId) -> FederationResult<ValidatedTrustChain> {
         // Vec<TrustAnchorId>
         // Step 1: Fetch the target entity's configuration
-        let (leaf_config, leaf_jwt) = self.fetch_entity_configuration_with_jwt(entity_id).await?;
+        let leaf_jwt = self.http_client.fetch_entity_configuration(entity_id).await?;
+        let leaf_config: EntityConfiguration = self.jwt_processor.extract_claims_unverified(&leaf_jwt)?;
 
         // Step 2: Initialize chain with the leaf entity's configuration JWT
         let mut chain_jws = vec![leaf_jwt];
@@ -431,7 +432,8 @@ impl TrustChainResolver {
             let authority_id = current_authorities.first().unwrap().clone();
 
             // Fetch the authority's configuration
-            let (authority_config, _authority_jwt) = self.fetch_entity_configuration_with_jwt(&authority_id).await?;
+            let authority_jwt = self.http_client.fetch_entity_configuration(&authority_id).await?;
+            let authority_config: EntityConfiguration = self.jwt_processor.extract_claims_unverified(&authority_jwt)?;
 
             // The next hop must come from the authority's configuration, not from the subordinate statement.
             current_authorities = authority_config
@@ -466,6 +468,7 @@ impl TrustChainResolver {
 
             // Fetch the subordinate statement for the current subject
             let subordinate_statement_jwt = self
+                .http_client
                 .fetch_subordinate_statement(&federation_fetch_endpoint, &current_subject)
                 .await?;
 
@@ -487,61 +490,6 @@ impl TrustChainResolver {
         let trust_chain = TrustChain::new(chain_jws);
         let validator = TrustChainValidator::new();
         validator.validate_trust_chain(&trust_chain)
-    }
-
-    /// Fetch an entity's configuration from its well-known endpoint, returning both the config and JWT string.
-    async fn fetch_entity_configuration_with_jwt(
-        &self,
-        entity_id: &EntityId,
-    ) -> FederationResult<(EntityConfiguration, String)> {
-        let well_known_url = self.get_well_known_url(entity_id)?;
-
-        let response = self.http_client.get(well_known_url).send().await?;
-
-        if !response.status().is_success() {
-            return Err(FederationError::EntityResolution(format!(
-                "Failed to fetch entity configuration: HTTP {}",
-                response.status()
-            )));
-        }
-
-        let entity_config_jwt = response.text().await?;
-
-        let entity_config: EntityConfiguration = self.jwt_processor.extract_claims_unverified(&entity_config_jwt)?;
-
-        Ok((entity_config, entity_config_jwt))
-    }
-
-    /// Fetch a subordinate statement from an authority's federation_fetch_endpoint.
-    async fn fetch_subordinate_statement(
-        &self,
-        federation_fetch_endpoint: &Url,
-        subject_entity_id: &EntityId,
-    ) -> FederationResult<String> {
-        let mut url = federation_fetch_endpoint.clone();
-        url.query_pairs_mut().append_pair("sub", subject_entity_id.as_str());
-
-        let response = self.http_client.get(url).send().await?;
-
-        if !response.status().is_success() {
-            return Err(FederationError::EntityResolution(format!(
-                "Failed to fetch subordinate statement: HTTP {}",
-                response.status()
-            )));
-        }
-
-        response.text().await.map_err(FederationError::Http)
-    }
-
-    /// Build the well-known endpoint URL for an entity.
-    fn get_well_known_url(&self, entity_id: &EntityId) -> FederationResult<Url> {
-        let mut url = entity_id.clone();
-
-        // Remove any existing path and query
-        url.set_path("/.well-known/openid-federation");
-        url.set_query(None);
-
-        Ok(url)
     }
 }
 
@@ -585,6 +533,7 @@ mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use chrono::Duration;
     use jsonwebtoken::{Algorithm, EncodingKey};
+    use url::Url;
     use wiremock::{
         matchers::{method, path, query_param},
         Mock, MockServer, ResponseTemplate,
