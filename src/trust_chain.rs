@@ -144,7 +144,7 @@ impl TrustChainValidator {
 
                 validated_statements.push(ValidatedEntityStatement::Configuration(verified_anchor));
             } else {
-                // Intermediate entity statements
+                // Intermediate subordinate statements
                 let entity_statement: EntityStatement = self.jwt_processor.extract_claims_unverified(jwt_string)?;
 
                 entity_statement.validate()?;
@@ -156,14 +156,17 @@ impl TrustChainValidator {
                             "Trust chain subject mismatch".to_string(),
                         ));
                     }
+                } else {
+                    return Err(FederationError::TrustChainValidation(
+                        "Subordinate statement without expected subject".to_string(),
+                    ));
                 }
-                // TODO: else error no?
 
                 // For now, we'll store the unverified statement
                 // In a full implementation, we'd verify it against the issuer's keys
                 // TODO: why cant we verify the signature like the other match arms?
                 current_subject = Some(entity_statement.claims.iss.clone());
-                validated_statements.push(ValidatedEntityStatement::Statement(entity_statement));
+                validated_statements.push(ValidatedEntityStatement::SubordinateStatement(entity_statement));
             }
         }
 
@@ -178,7 +181,8 @@ impl TrustChainValidator {
     }
 
     /// Validate that the trust chain statements are properly linked.
-    /// TODO: also check beginning and end if they are entity configurations
+    /// Enforces: leaf configuration at index 0, trust anchor configuration at last index,
+    /// only subordinate statements in between.
     fn validate_chain_linkage(&self, statements: &[ValidatedEntityStatement]) -> FederationResult<()> {
         if statements.len() < 2 {
             return Err(FederationError::TrustChainValidation(
@@ -186,34 +190,55 @@ impl TrustChainValidator {
             ));
         }
 
+        // First statement must be a configuration (leaf)
+        match statements.first() {
+            Some(ValidatedEntityStatement::Configuration(_)) => {}
+            _ => {
+                return Err(FederationError::TrustChainValidation(
+                    "First statement in trust chain must be a leaf entity configuration".to_string(),
+                ))
+            }
+        }
+
+        // Last statement must be a configuration (trust anchor)
+        match statements.last() {
+            Some(ValidatedEntityStatement::Configuration(_)) => {}
+            _ => {
+                return Err(FederationError::TrustChainValidation(
+                    "Last statement in trust chain must be a trust anchor configuration".to_string(),
+                ))
+            }
+        }
+
+        // All intermediate statements must be subordinate statements
+        for (i, statement) in statements.iter().enumerate().take(statements.len() - 1).skip(1) {
+            match statement {
+                ValidatedEntityStatement::SubordinateStatement(_) => {}
+                ValidatedEntityStatement::Configuration(_) => {
+                    return Err(FederationError::TrustChainValidation(format!(
+                        "Entity configuration found at position {} (only leaf and trust anchor allowed)",
+                        i
+                    )));
+                }
+            }
+        }
+
+        // Verify linkage: next statement's subject must equal current statement's issuer
         for i in 0..(statements.len() - 1) {
             let current_entity_id = match &statements[i] {
-                ValidatedEntityStatement::Configuration(config) => {
-                    if i != 0 {
-                        return Err(FederationError::TrustChainValidation(
-                            "Entity configuration can only be at the beginning or end of chain".to_string(),
-                        ));
-                    }
-                    &config.claims.sub
-                }
-                ValidatedEntityStatement::Statement(stmt) => &stmt.claims.iss,
+                ValidatedEntityStatement::Configuration(config) => &config.claims.sub,
+                ValidatedEntityStatement::SubordinateStatement(stmt) => &stmt.claims.iss,
             };
 
-            match &statements[i + 1] {
-                ValidatedEntityStatement::Statement(next_stmt) => {
-                    if &next_stmt.claims.sub != current_entity_id {
-                        return Err(FederationError::TrustChainValidation(
-                            "Trust chain is not properly linked".to_string(),
-                        ));
-                    }
-                }
-                ValidatedEntityStatement::Configuration(_) => {
-                    if i + 1 != statements.len() - 1 {
-                        return Err(FederationError::TrustChainValidation(
-                            "Entity configuration can only be at the beginning or end of chain".to_string(),
-                        ));
-                    }
-                }
+            let next_subject = match &statements[i + 1] {
+                ValidatedEntityStatement::SubordinateStatement(next_stmt) => &next_stmt.claims.sub,
+                ValidatedEntityStatement::Configuration(next_config) => &next_config.claims.sub,
+            };
+
+            if next_subject != current_entity_id {
+                return Err(FederationError::TrustChainValidation(
+                    "Trust chain is not properly linked".to_string(),
+                ));
             }
         }
 
@@ -221,20 +246,26 @@ impl TrustChainValidator {
     }
 
     /// Get the leaf entity ID from the validated statements.
+    /// The leaf must be an entity configuration.
     fn get_leaf_entity_id(&self, statements: &[ValidatedEntityStatement]) -> FederationResult<EntityId> {
         match statements.first() {
             Some(ValidatedEntityStatement::Configuration(config)) => Ok(config.claims.sub.clone()),
-            Some(ValidatedEntityStatement::Statement(stmt)) => Ok(stmt.claims.sub.clone()),
+            Some(ValidatedEntityStatement::SubordinateStatement(_)) => Err(FederationError::TrustChainValidation(
+                "Leaf entity must be an entity configuration, not a subordinate statement".to_string(),
+            )),
             None => Err(FederationError::TrustChainValidation("Empty trust chain".to_string())),
         }
     }
 
     /// Get the trust anchor ID from the validated statements.
+    /// The trust anchor must be an entity configuration.
     fn get_trust_anchor_id(&self, statements: &[ValidatedEntityStatement]) -> FederationResult<EntityId> {
         match statements.last() {
             Some(ValidatedEntityStatement::Configuration(config)) => Ok(config.claims.iss.clone()),
-            Some(ValidatedEntityStatement::Statement(stmt)) => Ok(stmt.claims.iss.clone()),
-            None => Err(FederationError::TrustChainValidation("Empty trust chain".to_string())), // Here its an error if its empy but in `ValidatedTrustChain` its not, should be the same behavior.
+            Some(ValidatedEntityStatement::SubordinateStatement(_)) => Err(FederationError::TrustChainValidation(
+                "Trust anchor must be an entity configuration, not a subordinate statement".to_string(),
+            )),
+            None => Err(FederationError::TrustChainValidation("Empty trust chain".to_string())),
         }
     }
 }
@@ -256,44 +287,69 @@ pub struct ValidatedTrustChain {
     pub trust_anchor_id: EntityId,
 }
 
-/// Validated entity statement (either a configuration or a statement).
+/// Validated entity statement (either a configuration or a subordinate statement).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ValidatedEntityStatement {
-    /// Entity Configuration (self-signed)
+    /// Entity Configuration (self-signed, only at leaf or trust anchor)
     Configuration(EntityConfiguration),
-    /// Entity Statement (signed by another entity)
-    Statement(EntityStatement),
+    /// Subordinate Statement (signed by another entity, only between leaf and anchor)
+    SubordinateStatement(EntityStatement),
 }
 
 impl ValidatedTrustChain {
     /// Get the leaf entity configuration.
-    pub fn leaf_entity(&self) -> Option<&EntityConfiguration> {
+    /// Returns an error if the trust chain is malformed (first statement is not a configuration).
+    pub fn leaf_entity(&self) -> FederationResult<&EntityConfiguration> {
         match self.statements.first() {
-            Some(ValidatedEntityStatement::Configuration(config)) => Some(config),
-            _ => None, // TODO: this is different behavior than the `get_leaf_entity_id` when empty
+            Some(ValidatedEntityStatement::Configuration(config)) => Ok(config),
+            Some(ValidatedEntityStatement::SubordinateStatement(_)) => Err(FederationError::TrustChainValidation(
+                "Trust chain corruption: first statement must be a leaf entity configuration".to_string(),
+            )),
+            None => Err(FederationError::TrustChainValidation(
+                "Cannot retrieve leaf entity from empty trust chain".to_string(),
+            )),
         }
     }
 
     /// Get the trust anchor configuration.
-    pub fn trust_anchor(&self) -> Option<&EntityConfiguration> {
+    /// Returns an error if the trust chain is malformed (last statement is not a configuration).
+    pub fn trust_anchor(&self) -> FederationResult<&EntityConfiguration> {
         match self.statements.last() {
-            Some(ValidatedEntityStatement::Configuration(config)) => Some(config),
-            _ => None, // TODO same here
+            Some(ValidatedEntityStatement::Configuration(config)) => Ok(config),
+            Some(ValidatedEntityStatement::SubordinateStatement(_)) => Err(FederationError::TrustChainValidation(
+                "Trust chain corruption: last statement must be a trust anchor configuration".to_string(),
+            )),
+            None => Err(FederationError::TrustChainValidation(
+                "Cannot retrieve trust anchor from empty trust chain".to_string(),
+            )),
         }
     }
 
-    /// Get all intermediate entity statements.
-    pub fn intermediate_statements(&self) -> Vec<&EntityStatement> {
-        self.statements
+    /// Get all intermediate subordinate statements.
+    /// Returns an error if any intermediate statement is not a subordinate statement (indicating chain corruption).
+    pub fn intermediate_statements(&self) -> FederationResult<Vec<&EntityStatement>> {
+        let mut intermediates = Vec::new();
+
+        for (i, stmt) in self
+            .statements
             .iter()
             .skip(1) // Skip the leaf
             .take(self.statements.len().saturating_sub(2)) // Take all except trust anchor
-            .filter_map(|stmt| match stmt {
-                ValidatedEntityStatement::Statement(s) => Some(s),
-                _ => None, // TODO: same here
-            })
-            .collect()
+            .enumerate()
+        {
+            match stmt {
+                ValidatedEntityStatement::SubordinateStatement(s) => intermediates.push(s),
+                ValidatedEntityStatement::Configuration(_) => {
+                    return Err(FederationError::TrustChainValidation(format!(
+                        "Trust chain corruption: entity configuration found at intermediate position {}",
+                        i + 1
+                    )));
+                }
+            }
+        }
+
+        Ok(intermediates)
     }
 
     /// Get the final resolved metadata for the leaf entity.
@@ -302,20 +358,16 @@ impl ValidatedTrustChain {
     /// https://openid.net/specs/openid-federation-1_0.html#name-metadata-resolution
     pub fn resolve_metadata(&self) -> FederationResult<crate::EntityMetadata> {
         // Start with the leaf entity's metadata
-        let mut final_metadata = self
-            .leaf_entity()
-            .and_then(|config| config.metadata.clone())
-            .unwrap_or_default();
+        let leaf_config = self.leaf_entity()?;
+        let mut final_metadata = leaf_config.metadata.clone().unwrap_or_default();
 
-        // Apply metadata policies from each statement in the chain
-        for statement in &self.statements {
-            if let ValidatedEntityStatement::Statement(stmt) = statement {
-                if let Some(metadata_policy) = &stmt.metadata_policy {
-                    // Apply metadata policy to the final metadata
-                    // This is a simplified implementation - a full implementation
-                    // would properly apply all policy language operators
-                    self.apply_metadata_policy(&mut final_metadata, metadata_policy)?;
-                }
+        // Apply metadata policies from each subordinate statement in the chain
+        for statement in self.intermediate_statements()? {
+            if let Some(metadata_policy) = &statement.metadata_policy {
+                // Apply metadata policy to the final metadata
+                // This is a simplified implementation - a full implementation
+                // would properly apply all policy language operators
+                self.apply_metadata_policy(&mut final_metadata, metadata_policy)?;
             }
         }
 
@@ -789,10 +841,10 @@ mod tests {
                 ValidatedEntityStatement::Configuration(config) => {
                     assert!(!config.jwks.keys.is_empty(), "Configuration must have non-empty JWKS");
                 }
-                ValidatedEntityStatement::Statement(statement) => {
+                ValidatedEntityStatement::SubordinateStatement(statement) => {
                     assert!(
                         statement.jwks.is_some() && !statement.jwks.unwrap().keys.is_empty(),
-                        "Statement must have non-empty JWKS"
+                        "Subordinate statement must have non-empty JWKS"
                     );
                 }
             }
@@ -849,10 +901,10 @@ mod tests {
                 ValidatedEntityStatement::Configuration(config) => {
                     assert!(!config.jwks.keys.is_empty(), "Configuration must have non-empty JWKS");
                 }
-                ValidatedEntityStatement::Statement(statement) => {
+                ValidatedEntityStatement::SubordinateStatement(statement) => {
                     assert!(
                         statement.jwks.is_some() && !statement.jwks.unwrap().keys.is_empty(),
-                        "Statement must have non-empty JWKS"
+                        "Subordinate statement must have non-empty JWKS"
                     );
                 }
             }
