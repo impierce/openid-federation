@@ -128,10 +128,8 @@ impl FederationEntity {
 
             let config_jwt = self.client.fetch_entity_configuration(entity_id).await?;
             let config: EntityConfiguration = JwtProcessor::new().extract_claims_unverified(&config_jwt)?;
-
             let is_root = chain.is_empty();
             let is_trusted_anchor = trusted_anchors.contains(entity_id);
-
             if is_root || is_trusted_anchor {
                 chain.push(config_jwt);
             }
@@ -150,12 +148,13 @@ impl FederationEntity {
                     entity_id
                 )));
             }
-
+            let mut last_error: Option<String> = None;
             for superior_id in authority_hints.iter() {
                 if let Ok(superior_config_jwt) = self.client.fetch_entity_configuration(superior_id).await {
                     let superior_config: EntityConfiguration =
                         JwtProcessor::new().extract_claims_unverified(&superior_config_jwt)?;
 
+                    // TODO: metadata is optional so should have a fallback with entity_id + /fetch
                     let fetch_endpoint = superior_config
                         .metadata
                         .as_ref()
@@ -170,7 +169,7 @@ impl FederationEntity {
 
                     if let Ok(subordinate_jwt) = self
                         .client
-                        .fetch_entity_statement(&fetch_endpoint, superior_id, entity_id)
+                        .fetch_subordinate_statement(&fetch_endpoint, entity_id)
                         .await
                     {
                         let rollback_len = chain.len();
@@ -181,18 +180,27 @@ impl FederationEntity {
                             .await
                         {
                             Ok(()) => return Ok(()),
-                            Err(_) => {
+                            Err(err) => {
+                                last_error = Some(err.to_string());
                                 chain.truncate(rollback_len);
                                 continue;
                             }
                         }
+                    } else {
+                        last_error = Some(format!(
+                            "Failed to fetch subordinate statement from {} for {}",
+                            superior_id, entity_id
+                        ));
                     }
+                } else {
+                    last_error = Some(format!("Failed to fetch superior configuration for {}", superior_id));
                 }
             }
 
+            let details = last_error.map(|e| format!(" Last error: {}", e)).unwrap_or_default();
             Err(FederationError::EntityResolution(format!(
-                "No superior for {} could establish a path to a trusted anchor",
-                entity_id
+                "No superior for {} could establish a path to a trusted anchor.{}",
+                entity_id, details
             )))
         })
     }
