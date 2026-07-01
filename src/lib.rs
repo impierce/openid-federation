@@ -305,8 +305,8 @@ mod tests {
         };
 
         // Step 6 & 7: LIGO Wiki discovers the leaf trust chain up to the trust anchor
-        let trust_chain = op_entity
-            .discover_trust_chain(None, Some(&[federation_entity_id]))
+        let trust_chain = client
+            .discover_trust_chain(&op_entity.entity_id, Some(&[federation_entity_id]))
             .await
             .expect("trust chain discovery should succeed");
 
@@ -1023,7 +1023,9 @@ mod tests {
             leaf_url, intermediate_url, anchor_url
         );
 
-        let result = leaf_entity.discover_trust_chain(None, Some(&[anchor_url])).await;
+        let result = client
+            .discover_trust_chain(&leaf_entity.entity_id, Some(&[anchor_url]))
+            .await;
 
         // Verify successful discovery
         assert!(result.is_ok(), "result: {:?}", result);
@@ -1109,7 +1111,9 @@ mod tests {
             subordinate_statements: Vec::new(),
         };
 
-        let result = leaf_entity.discover_trust_chain(None, Some(&trusted_anchors)).await;
+        let result = client
+            .discover_trust_chain(&leaf_entity.entity_id, Some(&trusted_anchors))
+            .await;
 
         // Verify discovery fails due to no path to trusted anchor
         assert!(
@@ -1197,7 +1201,9 @@ mod tests {
             subordinate_statements: Vec::new(),
         };
 
-        let result = leaf_entity.discover_trust_chain(None, Some(&trusted_anchors)).await;
+        let result = client
+            .discover_trust_chain(&leaf_entity.entity_id, Some(&trusted_anchors))
+            .await;
 
         // Verify discovery fails due to missing fetch endpoint
         assert!(result.is_err(), "Discovery should fail when fetch endpoint is missing");
@@ -1349,7 +1355,9 @@ mod tests {
             subordinate_statements: Vec::new(),
         };
 
-        let result = entity_a.discover_trust_chain(None, Some(&trusted_anchors)).await;
+        let result = client
+            .discover_trust_chain(&entity_a.entity_id, Some(&trusted_anchors))
+            .await;
 
         // Verify discovery fails due to loop detection
         assert!(result.is_err(), "Discovery should fail due to loop detection");

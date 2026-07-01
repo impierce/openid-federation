@@ -500,8 +500,8 @@ mod tests {
             subordinate_statements: Vec::new(),
         };
 
-        let validated_trustchain = leaf_entity
-            .discover_trust_chain(None, Some(&[trust_anchor_url]))
+        let validated_trustchain = fed_client
+            .discover_trust_chain(&leaf_entity.entity_id, Some(&[trust_anchor_url]))
             .await
             .expect("trust chain should resolve");
 
@@ -569,8 +569,8 @@ mod tests {
             subordinate_statements: Vec::new(),
         };
 
-        let validated_trustchain = leaf_entity
-            .discover_trust_chain(None, Some(&[trust_anchor_url]))
+        let validated_trustchain = fed_client
+            .discover_trust_chain(&leaf_entity.entity_id, Some(&[trust_anchor_url]))
             .await
             .expect("trust chain should resolve");
 
@@ -653,8 +653,8 @@ mod tests {
             subordinate_statements: Vec::new(),
         };
 
-        let err = leaf_entity
-            .discover_trust_chain(None, Some(&[trust_anchor_url]))
+        let err = fed_client
+            .discover_trust_chain(&leaf_entity.entity_id, Some(&[trust_anchor_url]))
             .await
             .unwrap_err();
 
