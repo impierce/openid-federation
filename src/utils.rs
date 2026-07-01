@@ -174,7 +174,7 @@ impl FederationClient {
     ) -> FederationResult<TrustChain> {
         let mut visited = HashSet::new();
         let mut chain = Vec::new();
-        
+
         let start_entity_config_jwt = self.fetch_entity_configuration(start_entity_id).await?;
         let start_entity_configuration: EntityConfiguration =
             JwtProcessor::new().extract_claims_unverified(&start_entity_config_jwt)?;
@@ -218,7 +218,7 @@ impl FederationClient {
         trusted_anchors: &'a [EntityId],
         visited: &'a mut HashSet<EntityId>,
         chain: &'a mut Vec<String>,
-    ) -> Pin<Box<dyn Future<Output = FederationResult<()>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = FederationResult<()>> + Send + 'a>> {
         Box::pin(async move {
             if visited.contains(entity_id) {
                 return Err(FederationError::EntityResolution(format!(
