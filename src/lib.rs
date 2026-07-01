@@ -10,6 +10,7 @@
 #![warn(clippy::all)]
 
 pub mod entity;
+pub mod entity_statement;
 pub mod error;
 pub mod jwk;
 pub mod jwt;
@@ -18,7 +19,7 @@ pub mod trust_chain;
 pub mod types;
 pub mod utils;
 
-pub use entity::*;
+pub use entity_statement::*;
 pub use error::*;
 pub use jwk::{Jwk, JwkSet};
 pub use jwt::*;
@@ -202,7 +203,7 @@ mod tests {
     /// https://openid.net/specs/openid-federation-1_0.html#name-the-ligo-wiki-discovers-the
     #[tokio::test]
     async fn test_ligo_wiki_discovers_leaf_metadata() {
-        use crate::FederationClient;
+        use crate::{entity::FederationEntity, FederationClient};
         use wiremock::{
             matchers::{method, path},
             Mock, MockServer, ResponseTemplate,
@@ -296,10 +297,16 @@ mod tests {
         let client = FederationClient::new();
         let op_entity_id = Url::parse(&op_url).unwrap();
         let federation_entity_id = Url::parse(&federation_url).unwrap();
+        let op_entity = FederationEntity {
+            client: client.clone(),
+            entity_id: op_entity_id.clone(),
+            entity_configuration: op_entity_config,
+            subordinate_statements: Vec::new(),
+        };
 
         // Step 6 & 7: LIGO Wiki discovers the leaf trust chain up to the trust anchor
-        let trust_chain = client
-            .discover_trust_chain(&op_entity_id, &[federation_entity_id])
+        let trust_chain = op_entity
+            .discover_trust_chain(None, Some(&[federation_entity_id]))
             .await
             .expect("trust chain discovery should succeed");
 
@@ -837,7 +844,7 @@ mod tests {
     /// Test 1: Happy path - successful single-path discovery (leaf → intermediate → anchor)
     #[tokio::test]
     async fn test_discover_trust_chain_happy_path() {
-        use crate::{utils::time, FederationClient};
+        use crate::{entity::FederationEntity, utils::time, FederationClient};
         use wiremock::{
             matchers::{method, path, query_param},
             Mock, MockServer, ResponseTemplate,
@@ -851,6 +858,7 @@ mod tests {
         let leaf_url = format!("http://{}", leaf_server.address());
         let intermediate_url = format!("http://{}", intermediate_server.address());
         let anchor_url = format!("http://{}", anchor_server.address());
+        let anchor_url = Url::parse(&anchor_url).unwrap(); // Ensure anchor URL is a valid URL string
 
         let encoding_key = EncodingKey::from_secret(b"test_secret");
 
@@ -905,7 +913,7 @@ mod tests {
             time::now(),
         )
         .with_metadata(intermediate_metadata)
-        .with_authority_hints(vec![Url::parse(&anchor_url).unwrap()]);
+        .with_authority_hints(vec![anchor_url.clone()]);
 
         let intermediate_jwt = encode(&federation_header(), &intermediate_config, &encoding_key).unwrap();
 
@@ -943,7 +951,7 @@ mod tests {
 
         // Create and mock the anchor entity configuration
         let anchor_config = EntityConfiguration::new(
-            Url::parse(&anchor_url).unwrap(),
+            anchor_url.clone(),
             {
                 let mut jwks = JwkSet::new();
                 jwks.add_key(create_test_symmetric_key());
@@ -968,9 +976,14 @@ mod tests {
         // Perform discovery
         let client = FederationClient::new();
         let leaf_entity_id = Url::parse(&leaf_url).unwrap();
-        let trusted_anchors = vec![Url::parse(&anchor_url).unwrap()];
+        let leaf_entity = FederationEntity {
+            client: client.clone(),
+            entity_id: leaf_entity_id.clone(),
+            entity_configuration: leaf_config,
+            subordinate_statements: Vec::new(),
+        };
 
-        let result = client.discover_trust_chain(&leaf_entity_id, &trusted_anchors).await;
+        let result = leaf_entity.discover_trust_chain(None, Some(&[anchor_url])).await;
 
         // Verify successful discovery
         assert!(result.is_ok(), "Discovery should succeed");
@@ -980,7 +993,7 @@ mod tests {
     /// Test 2: Error handling - untrusted path (discovered entity not in trusted-anchor set)
     #[tokio::test]
     async fn test_discover_trust_chain_untrusted_path() {
-        use crate::{utils::time, FederationClient};
+        use crate::{entity::FederationEntity, utils::time, FederationClient};
         use wiremock::{
             matchers::{method, path},
             Mock, MockServer, ResponseTemplate,
@@ -1049,8 +1062,14 @@ mod tests {
         let client = FederationClient::new();
         let leaf_entity_id = Url::parse(&leaf_url).unwrap();
         let trusted_anchors = vec![Url::parse("http://different.anchor.local").unwrap()]; // Different anchor
+        let leaf_entity = FederationEntity {
+            client: client.clone(),
+            entity_id: leaf_entity_id.clone(),
+            entity_configuration: leaf_config,
+            subordinate_statements: Vec::new(),
+        };
 
-        let result = client.discover_trust_chain(&leaf_entity_id, &trusted_anchors).await;
+        let result = leaf_entity.discover_trust_chain(None, Some(&trusted_anchors)).await;
 
         // Verify discovery fails due to no path to trusted anchor
         assert!(
@@ -1062,7 +1081,7 @@ mod tests {
     /// Test 3: Error handling - missing fetch endpoint
     #[tokio::test]
     async fn test_discover_trust_chain_missing_fetch_endpoint() {
-        use crate::{utils::time, FederationClient};
+        use crate::{entity::FederationEntity, utils::time, FederationClient};
         use wiremock::{
             matchers::{method, path},
             Mock, MockServer, ResponseTemplate,
@@ -1131,8 +1150,14 @@ mod tests {
         let client = FederationClient::new();
         let leaf_entity_id = Url::parse(&leaf_url).unwrap();
         let trusted_anchors = vec![Url::parse("http://anchor.local").unwrap()];
+        let leaf_entity = FederationEntity {
+            client: client.clone(),
+            entity_id: leaf_entity_id.clone(),
+            entity_configuration: leaf_config,
+            subordinate_statements: Vec::new(),
+        };
 
-        let result = client.discover_trust_chain(&leaf_entity_id, &trusted_anchors).await;
+        let result = leaf_entity.discover_trust_chain(None, Some(&trusted_anchors)).await;
 
         // Verify discovery fails due to missing fetch endpoint
         assert!(result.is_err(), "Discovery should fail when fetch endpoint is missing");
@@ -1141,7 +1166,7 @@ mod tests {
     /// Test 4: Loop protection - detects cycles in authority hints (A→B→A)
     #[tokio::test]
     async fn test_discover_trust_chain_loop_protection() {
-        use crate::{utils::time, FederationClient};
+        use crate::{entity::FederationEntity, utils::time, FederationClient};
         use wiremock::{
             matchers::{method, path},
             Mock, MockServer, ResponseTemplate,
@@ -1209,8 +1234,14 @@ mod tests {
         let client = FederationClient::new();
         let entity_a_id = Url::parse(&entity_a_url).unwrap();
         let trusted_anchors = vec![Url::parse("http://trusted.anchor.local").unwrap()]; // Non-existent anchor
+        let entity_a = FederationEntity {
+            client: client.clone(),
+            entity_id: entity_a_id.clone(),
+            entity_configuration: entity_a_config,
+            subordinate_statements: Vec::new(),
+        };
 
-        let result = client.discover_trust_chain(&entity_a_id, &trusted_anchors).await;
+        let result = entity_a.discover_trust_chain(None, Some(&trusted_anchors)).await;
 
         // Verify discovery fails due to loop detection
         assert!(result.is_err(), "Discovery should fail due to loop detection");

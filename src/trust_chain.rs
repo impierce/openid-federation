@@ -262,7 +262,7 @@ impl TrustChain {
 
 #[cfg(test)]
 mod tests {
-    use crate::{extract_claims_unverified, EntityMetadata, FederationClient, JwkSet};
+    use crate::{entity::FederationEntity, extract_claims_unverified, EntityMetadata, FederationClient, JwkSet};
 
     use super::*;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -493,8 +493,15 @@ mod tests {
 
         let fed_client = FederationClient::new();
 
-        let validated_trustchain = fed_client
-            .discover_trust_chain(&leaf_url, &[trust_anchor_url])
+        let leaf_entity = FederationEntity {
+            client: fed_client.clone(),
+            entity_id: leaf_url.clone(),
+            entity_configuration: leaf_config,
+            subordinate_statements: Vec::new(),
+        };
+
+        let validated_trustchain = leaf_entity
+            .discover_trust_chain(None, Some(&[trust_anchor_url]))
             .await
             .expect("trust chain should resolve");
 
@@ -555,8 +562,15 @@ mod tests {
 
         let fed_client = FederationClient::new();
 
-        let validated_trustchain = fed_client
-            .discover_trust_chain(&leaf_url, &[trust_anchor_url])
+        let leaf_entity = FederationEntity {
+            client: fed_client.clone(),
+            entity_id: leaf_url.clone(),
+            entity_configuration: leaf_config,
+            subordinate_statements: Vec::new(),
+        };
+
+        let validated_trustchain = leaf_entity
+            .discover_trust_chain(None, Some(&[trust_anchor_url]))
             .await
             .expect("trust chain should resolve");
 
@@ -632,8 +646,15 @@ mod tests {
 
         let fed_client = FederationClient::new();
 
-        let err = fed_client
-            .discover_trust_chain(&leaf_url, &[trust_anchor_url])
+        let leaf_entity = FederationEntity {
+            client: fed_client.clone(),
+            entity_id: leaf_url.clone(),
+            entity_configuration: leaf_config,
+            subordinate_statements: Vec::new(),
+        };
+
+        let err = leaf_entity
+            .discover_trust_chain(None, Some(&[trust_anchor_url]))
             .await
             .unwrap_err();
 

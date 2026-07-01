@@ -18,12 +18,6 @@ pub type RawJwkSet = HashMap<String, serde_json::Value>;
 /// Generic metadata type for flexibility.
 pub type Metadata = HashMap<String, serde_json::Value>;
 
-/// Authority hints - URLs of immediate superior entities.
-///
-/// Reference: OpenID Federation 1.0 - Section 3.1.2 Authority Hints
-/// https://openid.net/specs/openid-federation-1_0.html#name-authority-hints
-pub type AuthorityHints = Vec<EntityId>;
-
 /// Entity types as defined in the OpenID Federation specification.
 ///
 /// Reference: OpenID Federation 1.0 - Section 2.2 Entity Types
