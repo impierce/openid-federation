@@ -182,11 +182,10 @@ impl FederationClient {
         leaf_entity_id: &EntityId,
         trusted_anchors: &[EntityId],
     ) -> FederationResult<TrustChain> {
-        let trusted_anchors_set: HashSet<_> = trusted_anchors.iter().cloned().collect();
         let mut visited = HashSet::new();
         let mut chain = Vec::new();
 
-        self.discover_recursive(leaf_entity_id, &trusted_anchors_set, &mut visited, &mut chain)
+        self.discover_recursive(leaf_entity_id, trusted_anchors, &mut visited, &mut chain)
             .await?;
 
         if chain.is_empty() {
@@ -195,11 +194,7 @@ impl FederationClient {
             ));
         }
 
-        Ok(TrustChain {
-            chain,
-            metadata: None,
-            trust_marks: None,
-        })
+        TrustChain::try_new(chain)
     }
 
     /// Recursively discover trust chain by traversing superiors.
@@ -208,7 +203,7 @@ impl FederationClient {
     fn discover_recursive<'a>(
         &'a self,
         entity_id: &'a EntityId,
-        trusted_anchors: &'a HashSet<EntityId>,
+        trusted_anchors: &'a [EntityId],
         visited: &'a mut HashSet<EntityId>,
         chain: &'a mut Vec<String>,
     ) -> Pin<Box<dyn Future<Output = FederationResult<()>> + 'a>> {
