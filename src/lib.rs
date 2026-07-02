@@ -241,7 +241,7 @@ mod tests {
         let university_jwt = encode_entity_statement(&university_statement_about_op, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(university_jwt.clone())
@@ -270,7 +270,7 @@ mod tests {
         let federation_jwt = encode_entity_statement(&federation_statement_about_university, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(federation_jwt)
@@ -402,7 +402,7 @@ mod tests {
         let federation_client_jwt = encode_entity_statement(&federation_statement_about_client, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(federation_client_jwt.clone())
@@ -430,7 +430,7 @@ mod tests {
         let federation_op_jwt = encode_entity_statement(&federation_statement_about_op, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(federation_op_jwt.clone())
@@ -626,7 +626,9 @@ mod tests {
             policy_uri: None,
             logo_uri: None,
             contacts: Some(vec!["admin@university.localhost".to_string()]),
-            federation_fetch_endpoint: Some(Url::parse(&format!("{}/fetch", university_url)).unwrap()),
+            federation_fetch_endpoint: Some(
+                Url::parse(&format!("{}/federation_fetch_endpoint", university_url)).unwrap(),
+            ),
             federation_list_endpoint: Some(Url::parse(&format!("{}/list", university_url)).unwrap()),
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
@@ -669,7 +671,9 @@ mod tests {
             policy_uri: None,
             logo_uri: None,
             contacts: Some(vec!["admin@federation.localhost".to_string()]),
-            federation_fetch_endpoint: Some(Url::parse(&format!("{}/fetch", federation_url)).unwrap()),
+            federation_fetch_endpoint: Some(
+                Url::parse(&format!("{}/federation_fetch_endpoint", federation_url)).unwrap(),
+            ),
             federation_list_endpoint: Some(Url::parse(&format!("{}/list", federation_url)).unwrap()),
             federation_resolve_endpoint: Some(Url::parse(&format!("{}/resolve", federation_url)).unwrap()),
             federation_trust_mark_status_endpoint: None,
@@ -895,7 +899,7 @@ mod tests {
             policy_uri: None,
             logo_uri: None,
             contacts: None,
-            federation_fetch_endpoint: Some(intermediate_url.join("fetch").unwrap()),
+            federation_fetch_endpoint: Some(intermediate_url.join("federation_fetch_endpoint").unwrap()),
             federation_list_endpoint: None,
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
@@ -938,7 +942,7 @@ mod tests {
         let subordinate_jwt = encode(&federation_header(), &subordinate_stmt, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .and(query_param("sub", leaf_url.as_str()))
             .respond_with(
                 ResponseTemplate::new(200)
@@ -956,7 +960,7 @@ mod tests {
             policy_uri: None,
             logo_uri: None,
             contacts: None,
-            federation_fetch_endpoint: Some(anchor_url.join("fetch").unwrap()),
+            federation_fetch_endpoint: Some(anchor_url.join("federation_fetch_endpoint").unwrap()),
             federation_list_endpoint: None,
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
@@ -998,7 +1002,7 @@ mod tests {
         let anchor_subordinate_jwt = encode(&federation_header(), &anchor_subordinate_stmt, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .and(query_param("sub", intermediate_url.as_str()))
             .respond_with(
                 ResponseTemplate::new(200)
@@ -1233,7 +1237,9 @@ mod tests {
             policy_uri: None,
             logo_uri: None,
             contacts: None,
-            federation_fetch_endpoint: Some(Url::parse(&format!("{}/fetch", entity_a_url)).unwrap()),
+            federation_fetch_endpoint: Some(
+                Url::parse(&format!("{}/federation_fetch_endpoint", entity_a_url)).unwrap(),
+            ),
             federation_list_endpoint: None,
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
@@ -1247,7 +1253,9 @@ mod tests {
             policy_uri: None,
             logo_uri: None,
             contacts: None,
-            federation_fetch_endpoint: Some(Url::parse(&format!("{}/fetch", entity_b_url)).unwrap()),
+            federation_fetch_endpoint: Some(
+                Url::parse(&format!("{}/federation_fetch_endpoint", entity_b_url)).unwrap(),
+            ),
             federation_list_endpoint: None,
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
@@ -1315,7 +1323,7 @@ mod tests {
         let b_about_a_jwt = encode(&federation_header(), &b_about_a_stmt, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .and(query_param("sub", Url::parse(&entity_a_url).unwrap().as_str()))
             .respond_with(
                 ResponseTemplate::new(200)
@@ -1334,7 +1342,7 @@ mod tests {
         let a_about_b_jwt = encode(&federation_header(), &a_about_b_stmt, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .and(query_param("sub", Url::parse(&entity_b_url).unwrap().as_str()))
             .respond_with(
                 ResponseTemplate::new(200)

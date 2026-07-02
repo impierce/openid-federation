@@ -364,7 +364,7 @@ mod tests {
 
     fn build_fetch_endpoint(entity_id: &Url) -> Url {
         let mut endpoint = entity_id.clone();
-        endpoint.set_path("/fetch");
+        endpoint.set_path("/federation_fetch_endpoint");
         endpoint.set_query(None);
         endpoint
     }
@@ -409,7 +409,7 @@ mod tests {
 
     async fn mock_subordinate_statement(server: &MockServer, subject: &Url, jwt: String) {
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .and(query_param("sub", subject.as_str()))
             .respond_with(
                 ResponseTemplate::new(200)
