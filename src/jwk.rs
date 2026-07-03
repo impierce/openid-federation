@@ -91,10 +91,27 @@ impl JwkSet {
     }
 
     /// Find a key by its key ID.
+    ///
+    /// Supports both exact matches and DID key references where the JWT `kid` is a full
+    /// DID URL (e.g. `did:web:example.com#key-1`) and the JWK `kid` is just the fragment
+    /// (e.g. `key-1`).
     pub fn find_key(&self, kid: &str) -> Option<&Jwk> {
-        self.keys
+        // Exact match first.
+        if let Some(jwk) = self
+            .keys
             .iter()
             .find(|key| key.kid.as_ref().map(|k| k == kid).unwrap_or(false))
+        {
+            return Some(jwk);
+        }
+        // If the supplied kid contains a '#', try matching against only the fragment part.
+        if let Some(fragment) = kid.split_once('#').map(|x| x.1) {
+            return self
+                .keys
+                .iter()
+                .find(|key| key.kid.as_ref().map(|k| k == fragment).unwrap_or(false));
+        }
+        None
     }
 
     /// Get all keys suitable for signature verification.
@@ -131,9 +148,18 @@ impl Jwk {
                 DecodingKey::from_rsa_components(n, e)
                     .map_err(|e| FederationError::InvalidMetadata(format!("Failed to create RSA decoding key: {}", e)))
             }
-            "EC" => Err(FederationError::InvalidMetadata(
-                "EC keys not yet supported".to_string(),
-            )),
+            "EC" => {
+                let x = self
+                    .x
+                    .as_ref()
+                    .ok_or_else(|| FederationError::InvalidMetadata("EC key missing x coordinate".to_string()))?;
+                let y = self
+                    .y
+                    .as_ref()
+                    .ok_or_else(|| FederationError::InvalidMetadata("EC key missing y coordinate".to_string()))?;
+                DecodingKey::from_ec_components(x, y)
+                    .map_err(|e| FederationError::InvalidMetadata(format!("Failed to create EC decoding key: {}", e)))
+            }
             "oct" => {
                 let k = self
                     .k
