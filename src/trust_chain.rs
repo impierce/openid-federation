@@ -13,9 +13,10 @@ use serde::{Deserialize, Serialize};
 /// https://openid.net/specs/openid-federation-1_0.html#name-trust-chains
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrustChain {
-    /// Array of Entity Statements that form the trust chain
-    /// The first element is the leaf entity's Entity Statement
+    /// Array of Entity Configurations and Subordinate Statements that form the trust chain
+    /// The first element is the leaf entity's Entity Configuration
     /// The last element is the Trust Anchor's Entity Configuration
+    /// Everything in between are Subordinate Statements that link the leaf to the trust anchor via intermediary entities.
     pub chain: Vec<String>, // JWT strings
     /// Metadata obtained from the trust chain resolution
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -139,15 +140,15 @@ impl TrustChainValidator {
 
                 validated_statements.push(ValidatedEntityStatement::Configuration(verified_anchor));
             } else {
-                // Intermediate entity statements
-                let entity_statement: SubordinateStatement =
+                // Intermediate subordinate statements
+                let subordinate_statement: SubordinateStatement =
                     self.jwt_processor.extract_claims_unverified(jwt_string)?;
 
-                entity_statement.validate()?;
+                subordinate_statement.validate()?;
 
                 // Verify that the subject matches the expected entity
                 if let Some(expected_subject) = &current_subject {
-                    if &entity_statement.claims.sub != expected_subject {
+                    if &subordinate_statement.claims.sub != expected_subject {
                         return Err(FederationError::TrustChainValidation(
                             "Trust chain subject mismatch".to_string(),
                         ));
@@ -156,8 +157,8 @@ impl TrustChainValidator {
 
                 // For now, we'll store the unverified statement
                 // In a full implementation, we'd verify it against the issuer's keys
-                current_subject = Some(entity_statement.claims.iss.clone());
-                validated_statements.push(ValidatedEntityStatement::Statement(entity_statement));
+                current_subject = Some(subordinate_statement.claims.iss.clone());
+                validated_statements.push(ValidatedEntityStatement::SubordinateStatement(subordinate_statement));
             }
         }
 
@@ -182,12 +183,12 @@ impl TrustChainValidator {
         for i in 0..(statements.len() - 1) {
             let _current_entity_id = match &statements[i] {
                 ValidatedEntityStatement::Configuration(config) => &config.claims.sub,
-                ValidatedEntityStatement::Statement(stmt) => &stmt.claims.sub,
+                ValidatedEntityStatement::SubordinateStatement(stmt) => &stmt.claims.sub,
             };
 
             let next_issuer_id = match &statements[i + 1] {
                 ValidatedEntityStatement::Configuration(config) => &config.claims.iss,
-                ValidatedEntityStatement::Statement(stmt) => &stmt.claims.iss,
+                ValidatedEntityStatement::SubordinateStatement(stmt) => &stmt.claims.iss,
             };
 
             // For intermediate statements, the subject of the current statement
@@ -199,7 +200,7 @@ impl TrustChainValidator {
                             "Entity configuration can only be at the beginning or end of chain".to_string(),
                         ));
                     }
-                    ValidatedEntityStatement::Statement(stmt) => &stmt.claims.iss,
+                    ValidatedEntityStatement::SubordinateStatement(stmt) => &stmt.claims.iss,
                 };
 
                 if current_issuer_id != next_issuer_id {
@@ -217,7 +218,7 @@ impl TrustChainValidator {
     fn get_leaf_entity_id(&self, statements: &[ValidatedEntityStatement]) -> FederationResult<EntityId> {
         match statements.first() {
             Some(ValidatedEntityStatement::Configuration(config)) => Ok(config.claims.sub.clone()),
-            Some(ValidatedEntityStatement::Statement(stmt)) => Ok(stmt.claims.sub.clone()),
+            Some(ValidatedEntityStatement::SubordinateStatement(stmt)) => Ok(stmt.claims.sub.clone()),
             None => Err(FederationError::TrustChainValidation("Empty trust chain".to_string())),
         }
     }
@@ -226,7 +227,7 @@ impl TrustChainValidator {
     fn get_trust_anchor_id(&self, statements: &[ValidatedEntityStatement]) -> FederationResult<EntityId> {
         match statements.last() {
             Some(ValidatedEntityStatement::Configuration(config)) => Ok(config.claims.iss.clone()),
-            Some(ValidatedEntityStatement::Statement(stmt)) => Ok(stmt.claims.iss.clone()),
+            Some(ValidatedEntityStatement::SubordinateStatement(stmt)) => Ok(stmt.claims.iss.clone()),
             None => Err(FederationError::TrustChainValidation("Empty trust chain".to_string())),
         }
     }
@@ -249,13 +250,13 @@ pub struct ValidatedTrustChain {
     pub trust_anchor_id: EntityId,
 }
 
-/// Validated entity statement (either a configuration or a statement).
+/// Validated entity statement (either an entity configuration or a subordinate statement).
 #[derive(Debug, Clone)]
 pub enum ValidatedEntityStatement {
     /// Entity Configuration (self-signed)
     Configuration(EntityConfiguration),
-    /// Entity Statement (signed by another entity)
-    Statement(SubordinateStatement),
+    /// Subordinate Statement (signed by another entity)
+    SubordinateStatement(SubordinateStatement),
 }
 
 impl ValidatedTrustChain {
@@ -275,14 +276,14 @@ impl ValidatedTrustChain {
         }
     }
 
-    /// Get all intermediate entity statements.
+    /// Get all intermediate subordinate statements.
     pub fn intermediate_statements(&self) -> Vec<&SubordinateStatement> {
         self.statements
             .iter()
             .skip(1) // Skip the leaf
             .take(self.statements.len().saturating_sub(2)) // Take all except trust anchor
             .filter_map(|stmt| match stmt {
-                ValidatedEntityStatement::Statement(s) => Some(s),
+                ValidatedEntityStatement::SubordinateStatement(s) => Some(s),
                 _ => None,
             })
             .collect()
@@ -301,7 +302,7 @@ impl ValidatedTrustChain {
 
         // Apply metadata policies from each statement in the chain
         for statement in &self.statements {
-            if let ValidatedEntityStatement::Statement(stmt) = statement {
+            if let ValidatedEntityStatement::SubordinateStatement(stmt) = statement {
                 if let Some(metadata_policy) = &stmt.metadata_policy {
                     // Apply metadata policy to the final metadata
                     // This is a simplified implementation - a full implementation

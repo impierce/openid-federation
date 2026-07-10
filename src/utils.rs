@@ -111,11 +111,11 @@ impl FederationClient {
         self.http_client.fetch_text(well_known_url).await
     }
 
-    /// Fetch an entity statement from a federation fetch endpoint.
+    /// Fetch an subordinate statement from a federation fetch endpoint.
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
     /// https://openid.net/specs/openid-federation-1_0.html#name-fetching-a-subordinate-sta
-    pub async fn fetch_entity_statement(
+    pub async fn fetch_subordinate_statement(
         &self,
         fetch_endpoint: &Url,
         issuer: &EntityId,
@@ -255,7 +255,7 @@ impl FederationClient {
                         })?;
 
                     if let Ok(subordinate_jwt) = self
-                        .fetch_entity_statement(&fetch_endpoint, superior_id, entity_id)
+                        .fetch_subordinate_statement(&fetch_endpoint, superior_id, entity_id)
                         .await
                     {
                         // Insert the subordinate statement at the beginning (before current entity's config)
@@ -396,8 +396,8 @@ pub mod time {
         expires_in(Duration::hours(24))
     }
 
-    /// Get a standard expiration time for entity statements (1 hour from now).
-    pub fn standard_entity_statement_expiry() -> i64 {
+    /// Get a standard expiration time for subordinate statements (1 hour from now).
+    pub fn standard_subordinate_statement_expiry() -> i64 {
         expires_in(Duration::hours(1))
     }
 }

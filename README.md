@@ -6,13 +6,13 @@ This library provides comprehensive support for OpenID Federation, enabling the 
 
 ## Features
 
-- **Entity Statements and Configurations**: Create and validate federation entity statements and configurations
+- **Subordinate Statements and Entity Configurations**: Create and validate federation subordinate statements and entity configurations
 - **Trust Chain Management**: Build and validate trust chains for federation entities
 - **JWT Processing**: Sign and verify JWTs with federation-specific extensions
 - **Metadata Handling**: Support for all entity types (Federation Entity, OpenID Provider, Relying Party, etc.)
 - **Policy Language**: Implementation of federation metadata policy language
 - **HTTP Client**: Built-in client for fetching entity configurations and statements
-- **Comprehensive Validation**: Full validation of entity statements, trust chains, and metadata
+- **Comprehensive Validation**: Full validation of subordinate statements, entity configurations, trust chains, and metadata
 
 ## Quick Start
 
@@ -27,7 +27,7 @@ openid-federation = "0.1.0"
 
 ```rust
 use openid_federation::{
-    EntityConfiguration, EntityStatement, JwkSet, FederationEntityMetadata,
+    EntityConfiguration, SubordinateStatement, JwkSet, FederationEntityMetadata,
     EntityMetadata, TrustChain, TrustChainValidator
 };
 use chrono::{Duration, Utc};
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 This implementation follows the OpenID Federation 1.0 specification (draft 43) and includes:
 
-- Entity Statement format and validation
+- Subordinate Statement format and validation
 - Entity Configuration format and validation  
 - Trust Chain construction and validation
 - Federation metadata policy language
@@ -109,7 +109,7 @@ This implementation follows the OpenID Federation 1.0 specification (draft 43) a
 
 The library is organized into several key modules:
 
-- `entity`: Entity Statement and Entity Configuration structures
+- `entity`: Subordinate Statement and Entity Configuration structures
 - `trust_chain`: Trust chain validation and processing
 - `metadata`: All metadata types for different entity kinds
 - `jwk`: JSON Web Key and JWK Set utilities

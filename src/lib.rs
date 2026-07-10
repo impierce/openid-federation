@@ -49,12 +49,13 @@ mod tests {
     }
 
     #[test]
-    fn test_entity_statement_creation() {
+    fn test_subordinate_statement_creation() {
         let issuer = Url::parse("https://issuer.example.com").unwrap();
         let subject = Url::parse("https://subject.example.com").unwrap();
         let exp = (chrono::Utc::now() + Duration::hours(1)).timestamp();
         let iat = chrono::Utc::now().timestamp();
-        let jwks = JwkSet::new();
+        let mut jwks = JwkSet::new();
+        jwks.add_key(create_test_symmetric_key());
 
         let subordinate_statement = SubordinateStatement::new(issuer.clone(), subject.clone(), exp, iat, jwks);
 
@@ -238,9 +239,9 @@ mod tests {
             .mount(&op_server)
             .await;
 
-        // Step 2: Mock the University's Entity Statement about the OP
+        // Step 2: Mock the University's Subordinate Statement about the OP
         let university_statement_about_op = create_university_subordinate_statement_about_op(&university_url, &op_url);
-        let university_jwt = encode_entity_statement(&university_statement_about_op, &encoding_key);
+        let university_jwt = encode_subordinate_statement(&university_statement_about_op, &encoding_key);
 
         Mock::given(method("GET"))
             .and(path("/fetch"))
@@ -266,10 +267,10 @@ mod tests {
             .mount(&university_server)
             .await;
 
-        // Step 4: Mock the Federation's Entity Statement about the University
+        // Step 4: Mock the Federation's Subordinate Statement about the University
         let federation_statement_about_university =
             create_federation_statement_about_university(&federation_url, &university_url);
-        let federation_jwt = encode_entity_statement(&federation_statement_about_university, &encoding_key);
+        let federation_jwt = encode_subordinate_statement(&federation_statement_about_university, &encoding_key);
 
         Mock::given(method("GET"))
             .and(path("/fetch"))
@@ -397,9 +398,9 @@ mod tests {
             .mount(&client_server)
             .await;
 
-        // Step 4: Mock the Federation's Entity Statement about the Client
+        // Step 4: Mock the Federation's Subordinate Statement about the Client
         let federation_statement_about_client = create_federation_statement_about_client(&federation_url, &client_url);
-        let federation_client_jwt = encode_entity_statement(&federation_statement_about_client, &encoding_key);
+        let federation_client_jwt = encode_subordinate_statement(&federation_statement_about_client, &encoding_key);
 
         Mock::given(method("GET"))
             .and(path("/fetch"))
@@ -420,14 +421,14 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(federation_config_jwt.clone())
-                    .insert_header("content-type", "application/entity-statement+jwt"),
+                    .insert_header("content-type", "application/subordinate-statement+jwt"),
             )
             .mount(&federation_server)
             .await;
 
-        // Step 6: Mock the Federation's Entity Statement about the OP
+        // Step 6: Mock the Federation's Subordinate Statement about the OP
         let federation_statement_about_op = create_federation_statement_about_op(&federation_url, &op_url);
-        let federation_op_jwt = encode_entity_statement(&federation_statement_about_op, &encoding_key);
+        let federation_op_jwt = encode_subordinate_statement(&federation_statement_about_op, &encoding_key);
 
         Mock::given(method("GET"))
             .and(path("/fetch"))
@@ -620,7 +621,7 @@ mod tests {
 
         let issuer = Url::parse(university_url).unwrap();
         let subject = Url::parse(op_url).unwrap();
-        let exp = time::standard_entity_statement_expiry();
+        let exp = time::standard_subordinate_statement_expiry();
         let iat = time::now();
 
         let mut jwks = JwkSet::new();
@@ -666,7 +667,7 @@ mod tests {
 
         let issuer = Url::parse(federation_url).unwrap();
         let subject = Url::parse(university_url).unwrap();
-        let exp = time::standard_entity_statement_expiry();
+        let exp = time::standard_subordinate_statement_expiry();
         let iat = time::now();
 
         let mut jwks = JwkSet::new();
@@ -708,7 +709,7 @@ mod tests {
         encode(&header, config, key).unwrap()
     }
 
-    fn encode_entity_statement(statement: &SubordinateStatement, key: &EncodingKey) -> String {
+    fn encode_subordinate_statement(statement: &SubordinateStatement, key: &EncodingKey) -> String {
         let mut header = Header::new(Algorithm::HS256);
         header.kid = Some("test-key-1".to_string());
         encode(&header, statement, key).unwrap()
@@ -831,7 +832,7 @@ mod tests {
 
         let issuer = Url::parse(federation_url).unwrap();
         let subject = Url::parse(client_url).unwrap();
-        let exp = time::standard_entity_statement_expiry();
+        let exp = time::standard_subordinate_statement_expiry();
         let iat = time::now();
 
         let mut jwks = JwkSet::new();
@@ -845,7 +846,7 @@ mod tests {
 
         let issuer = Url::parse(federation_url).unwrap();
         let subject = Url::parse(op_url).unwrap();
-        let exp = time::standard_entity_statement_expiry();
+        let exp = time::standard_subordinate_statement_expiry();
         let iat = time::now();
 
         let mut jwks = JwkSet::new();
@@ -948,7 +949,7 @@ mod tests {
         let subordinate_stmt = SubordinateStatement::new(
             Url::parse(&intermediate_url).unwrap(),
             Url::parse(&leaf_url).unwrap(),
-            time::standard_entity_statement_expiry(),
+            time::standard_subordinate_statement_expiry(),
             time::now(),
             intermediate_signing_jwks,
         );
@@ -989,7 +990,7 @@ mod tests {
         let anchor_subordinate_stmt = SubordinateStatement::new(
             Url::parse(&anchor_url).unwrap(),
             Url::parse(&intermediate_url).unwrap(),
-            time::standard_entity_statement_expiry(),
+            time::standard_subordinate_statement_expiry(),
             time::now(),
             anchor_signing_jwks,
         );
@@ -1290,7 +1291,7 @@ mod tests {
         let statement_b_about_a = SubordinateStatement::new(
             Url::parse(&entity_b_url).unwrap(),
             Url::parse(&entity_a_url).unwrap(),
-            time::standard_entity_statement_expiry(),
+            time::standard_subordinate_statement_expiry(),
             time::now(),
             entity_b_signing_jwks,
         );
@@ -1315,7 +1316,7 @@ mod tests {
         let statement_a_about_b = SubordinateStatement::new(
             Url::parse(&entity_a_url).unwrap(),
             Url::parse(&entity_b_url).unwrap(),
-            time::standard_entity_statement_expiry(),
+            time::standard_subordinate_statement_expiry(),
             time::now(),
             entity_a_signing_jwks,
         );
