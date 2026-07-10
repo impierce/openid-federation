@@ -237,7 +237,7 @@ impl JwtProcessor {
             }
         }
 
-        // If no kid or key not found, try all signature keys
+        // If no kid or key not found, try all signature keys // TODO: is this desired behavior? especially an incorrect KID would probably rather just fail no?
         let signature_keys = jwks.signature_keys();
         for jwk in signature_keys {
             if let Ok(decoding_key) = jwk.to_decoding_key() {
@@ -251,18 +251,18 @@ impl JwtProcessor {
             "No suitable key found for JWT verification".to_string(),
         ))
     }
+}
 
-    /// Extract claims from a JWT without verification (for inspection purposes only).
-    pub fn extract_claims_unverified<T: for<'de> Deserialize<'de>>(&self, token: &str) -> FederationResult<T> {
-        let mut validation = Validation::default();
-        validation.insecure_disable_signature_validation();
-        validation.validate_exp = false;
-        validation.validate_nbf = false;
+/// Extract claims from a JWT without verification (for inspection purposes only).
+pub fn extract_claims_unverified<T: for<'de> Deserialize<'de>>(token: &str) -> FederationResult<T> {
+    let mut validation = Validation::default();
+    validation.insecure_disable_signature_validation();
+    validation.validate_exp = false;
+    validation.validate_nbf = false;
 
-        decode::<T>(token, &DecodingKey::from_secret(&[]), &validation)
-            .map(|token_data| token_data.claims)
-            .map_err(FederationError::from)
-    }
+    decode::<T>(token, &DecodingKey::from_secret(&[]), &validation)
+        .map(|token_data| token_data.claims)
+        .map_err(FederationError::from)
 }
 
 impl Default for JwtProcessor {

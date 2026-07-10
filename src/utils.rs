@@ -1,15 +1,15 @@
 //! Utility functions for OpenID Federation operations.
 
-use crate::{EntityConfiguration, EntityId, FederationError, FederationResult, JwtProcessor, TrustChain};
+use crate::{extract_claims_unverified, EntityConfiguration, EntityId, FederationError, FederationResult, TrustChain};
 use chrono::{Duration, Utc};
 use reqwest::Client;
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use url::Url;
 
 use async_trait::async_trait;
-use std::future::Future;
-use std::pin::Pin;
 
 /// Trait for HTTP clients used in federation operations.
 ///
@@ -77,6 +77,7 @@ impl HttpClient for ReqwestHttpClient {
 /// This client can be instantiated with any implementation of [`HttpClient`],
 /// allowing for flexibility in HTTP layer implementation (e.g., testing with mocks,
 /// using alternative HTTP libraries).
+#[derive(Clone)]
 pub struct FederationClient {
     http_client: Arc<dyn HttpClient>,
 }
@@ -118,29 +119,13 @@ impl FederationClient {
     /// https://openid.net/specs/openid-federation-1_0.html#name-fetching-a-subordinate-sta
     pub async fn fetch_subordinate_statement(
         &self,
-        fetch_endpoint: &Url,
-        issuer: &EntityId,
+        federation_fetch_endpoint: &Url,
         subject: &EntityId,
     ) -> FederationResult<String> {
-        let mut url = fetch_endpoint.clone();
-        url.query_pairs_mut()
-            .append_pair("iss", issuer.as_str())
-            .append_pair("sub", subject.as_str());
+        let mut url = federation_fetch_endpoint.clone();
+        url.query_pairs_mut().append_pair("sub", subject.as_str());
 
         self.http_client.fetch_text(url).await
-    }
-
-    /// List entities from a federation list endpoint.
-    ///
-    /// Reference: OpenID Federation 1.0 - Section 8.3 Federation List Endpoint
-    /// https://openid.net/specs/openid-federation-1_0.html#name-federation-list-endpoint
-    pub async fn list_entities(&self, list_endpoint: &Url) -> FederationResult<Vec<EntityId>> {
-        let response_text = self.http_client.fetch_text(list_endpoint.clone()).await?;
-        let entity_list: Vec<String> = serde_json::from_str(&response_text)?;
-        entity_list
-            .into_iter()
-            .map(|url_str| Url::parse(&url_str).map_err(FederationError::from))
-            .collect()
     }
 
     /// Discover a trust chain from a leaf entity to a trusted anchor.
@@ -153,8 +138,10 @@ impl FederationClient {
     /// 4. Recursively discovering superiors until reaching a trusted anchor
     ///
     /// # Arguments
-    /// * `leaf_entity_id` - The entity to start discovery from
-    /// * `trusted_anchors` - Set of trusted anchor entity IDs (federation roots)
+    /// * `start_entity_id` - Starting entity for discovery.
+    /// * `trusted_anchors` - Optional set of trusted anchor entity IDs (federation roots).
+    ///   If `None`, trusted anchors are read from the starting entity configuration's
+    ///   `trust_anchor_hints`.
     ///
     /// # Returns
     /// A `TrustChain` containing JWTs from leaf to trusted anchor, or an error if:
@@ -168,14 +155,36 @@ impl FederationClient {
     /// https://openid.net/specs/openid-federation-1_0.html#name-fetching-entity-statement
     pub async fn discover_trust_chain(
         &self,
-        leaf_entity_id: &EntityId,
-        trusted_anchors: &[EntityId],
+        start_entity_id: &EntityId,
+        trusted_anchors: Option<&[EntityId]>,
     ) -> FederationResult<TrustChain> {
-        let trusted_anchors_set: HashSet<_> = trusted_anchors.iter().cloned().collect();
         let mut visited = HashSet::new();
         let mut chain = Vec::new();
 
-        self.discover_recursive(leaf_entity_id, &trusted_anchors_set, &mut visited, &mut chain)
+        let start_entity_config_jwt = self.fetch_entity_configuration(start_entity_id).await?;
+        let start_entity_configuration: EntityConfiguration = extract_claims_unverified(&start_entity_config_jwt)?;
+
+        let trusted_anchors: Vec<EntityId> = if let Some(trusted_anchors) = trusted_anchors {
+            trusted_anchors.to_vec()
+        } else {
+            let trust_anchor_hints = start_entity_configuration.trust_anchor_hints.clone().ok_or_else(|| {
+                FederationError::EntityResolution(
+                    "starting entity configuration has no trust_anchor_hints and no trusted anchors were provided"
+                        .to_string(),
+                )
+            })?;
+
+            if trust_anchor_hints.is_empty() {
+                return Err(FederationError::EntityResolution(
+                    "starting entity configuration has empty trust_anchor_hints and no trusted anchors were provided"
+                        .to_string(),
+                ));
+            }
+
+            trust_anchor_hints
+        };
+
+        self.discover_recursive(start_entity_id, &trusted_anchors, &mut visited, &mut chain)
             .await?;
 
         if chain.is_empty() {
@@ -184,25 +193,18 @@ impl FederationClient {
             ));
         }
 
-        Ok(TrustChain {
-            chain,
-            metadata: None,
-            trust_marks: None,
-        })
+        TrustChain::try_new(chain)
     }
 
     /// Recursively discover trust chain by traversing superiors.
-    ///
-    /// Private helper for discover_trust_chain that builds the chain bottom-up.
     fn discover_recursive<'a>(
         &'a self,
         entity_id: &'a EntityId,
-        trusted_anchors: &'a HashSet<EntityId>,
+        trusted_anchors: &'a [EntityId],
         visited: &'a mut HashSet<EntityId>,
         chain: &'a mut Vec<String>,
-    ) -> Pin<Box<dyn Future<Output = FederationResult<()>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = FederationResult<()>> + Send + 'a>> {
         Box::pin(async move {
-            // Check for loops
             if visited.contains(entity_id) {
                 return Err(FederationError::EntityResolution(format!(
                     "Loop detected in trust chain discovery at entity: {}",
@@ -211,19 +213,18 @@ impl FederationClient {
             }
             visited.insert(entity_id.clone());
 
-            // Fetch the entity's configuration
             let config_jwt = self.fetch_entity_configuration(entity_id).await?;
-            let config: EntityConfiguration = JwtProcessor::new().extract_claims_unverified(&config_jwt)?;
+            let config: EntityConfiguration = extract_claims_unverified(&config_jwt)?;
+            let is_root = chain.is_empty();
+            let is_trusted_anchor = trusted_anchors.contains(entity_id);
+            if is_root || is_trusted_anchor {
+                chain.push(config_jwt);
+            }
 
-            // Add this entity's configuration to the chain
-            chain.push(config_jwt);
-
-            // Check if this entity is a trusted anchor
-            if trusted_anchors.contains(entity_id) {
+            if is_trusted_anchor {
                 return Ok(());
             }
 
-            // Extract authority hints (immediate superiors)
             let authority_hints = config.authority_hints.ok_or_else(|| {
                 FederationError::EntityResolution(format!("Entity {} has no authority hints", entity_id))
             })?;
@@ -235,62 +236,79 @@ impl FederationClient {
                 )));
             }
 
-            // Try each superior (single-path: use first available)
+            let mut last_error: Option<String> = None;
             for superior_id in authority_hints.iter() {
-                // Fetch superior's configuration first
-                if let Ok(superior_config_jwt) = self.fetch_entity_configuration(superior_id).await {
-                    let superior_config: EntityConfiguration =
-                        JwtProcessor::new().extract_claims_unverified(&superior_config_jwt)?;
+                let superior_config_jwt = match self.fetch_entity_configuration(superior_id).await {
+                    Ok(jwt) => jwt,
+                    Err(err) => {
+                        last_error = Some(format!(
+                            "Failed to fetch superior {} configuration: {}",
+                            superior_id, err
+                        ));
+                        continue;
+                    }
+                };
 
-                    // Fetch the subordinate statement (entity signed by superior)
-                    let fetch_endpoint = superior_config
-                        .metadata
-                        .as_ref()
-                        .and_then(|m| m.federation_entity.as_ref())
-                        .and_then(|f| f.federation_fetch_endpoint.clone())
-                        .ok_or_else(|| {
-                            FederationError::EntityResolution(format!(
-                                "Superior {} has no federation_fetch_endpoint",
-                                superior_id
-                            ))
-                        })?;
+                let superior_config: EntityConfiguration = extract_claims_unverified(&superior_config_jwt)?;
 
-                    if let Ok(subordinate_jwt) = self
-                        .fetch_subordinate_statement(&fetch_endpoint, superior_id, entity_id)
-                        .await
-                    {
-                        // Insert the subordinate statement at the beginning (before current entity's config)
-                        chain.insert(chain.len() - 1, subordinate_jwt);
+                let fetch_endpoint = superior_config
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.federation_entity.as_ref())
+                    .and_then(|f| f.federation_fetch_endpoint.clone())
+                    .ok_or_else(|| {
+                        FederationError::EntityResolution(format!(
+                            "Superior {} has no federation_fetch_endpoint",
+                            superior_id
+                        ))
+                    })?;
 
-                        // Recursively discover from the superior
-                        match self
-                            .discover_recursive(superior_id, trusted_anchors, visited, chain)
-                            .await
-                        {
-                            Ok(()) => return Ok(()),
-                            Err(err) => {
-                                if let FederationError::EntityResolution(msg) = &err {
-                                    if msg.to_lowercase().contains("loop") {
-                                        return Err(err);
-                                    }
-                                }
+                let subordinate_jwt = match self.fetch_subordinate_statement(&fetch_endpoint, entity_id).await {
+                    Ok(jwt) => jwt,
+                    Err(err) => {
+                        last_error = Some(format!(
+                            "Failed to fetch subordinate statement from {} for {} via {}: {}",
+                            superior_id, entity_id, fetch_endpoint, err
+                        ));
+                        continue;
+                    }
+                };
 
-                                // Remove this superior from chain and try next one
-                                if chain.len() >= 2 {
-                                    chain.remove(chain.len() - 2);
-                                }
-                                continue;
-                            }
-                        }
+                let rollback_len = chain.len();
+                chain.push(subordinate_jwt);
+
+                match self
+                    .discover_recursive(superior_id, trusted_anchors, visited, chain)
+                    .await
+                {
+                    Ok(()) => return Ok(()),
+                    Err(err) => {
+                        last_error = Some(err.to_string());
+                        chain.truncate(rollback_len);
+                        continue;
                     }
                 }
             }
 
+            let details = last_error.map(|e| format!(" Last error: {}", e)).unwrap_or_default();
             Err(FederationError::EntityResolution(format!(
-                "No superior for {} could establish a path to a trusted anchor",
-                entity_id
+                "No superior for {} could establish a path to a trusted anchor.{}",
+                entity_id, details
             )))
         })
+    }
+
+    /// List entities from a federation list endpoint.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.3 Federation List Endpoint
+    /// https://openid.net/specs/openid-federation-1_0.html#name-federation-list-endpoint
+    pub async fn list_entities(&self, list_endpoint: &Url) -> FederationResult<Vec<EntityId>> {
+        let response_text = self.http_client.fetch_text(list_endpoint.clone()).await?;
+        let entity_list: Vec<String> = serde_json::from_str(&response_text)?;
+        entity_list
+            .into_iter()
+            .map(|url_str| Url::parse(&url_str).map_err(FederationError::from))
+            .collect()
     }
 
     /// Build the well-known OpenID Federation URL for an entity.

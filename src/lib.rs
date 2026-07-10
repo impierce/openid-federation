@@ -68,10 +68,9 @@ mod tests {
 
     #[test]
     fn test_trust_chain_creation() {
-        let chain = TrustChain::new(vec!["jwt1".to_string(), "jwt2".to_string(), "jwt3".to_string()]);
+        let chain = TrustChain::try_new(vec!["jwt1".to_string(), "jwt2".to_string(), "jwt3".to_string()]);
 
-        assert_eq!(chain.len(), 3);
-        assert!(!chain.is_empty());
+        assert!(chain.is_err());
     }
 
     #[test]
@@ -194,12 +193,12 @@ mod tests {
         assert!(future > chrono::Utc::now().timestamp());
     }
 
-    /// Integration test based on OpenID Federation 1.0 Appendix A.2: The LIGO Wiki Discovers the OP's Metadata
+    /// Integration test based on OpenID Federation 1.0 Appendix A.2: The LIGO Wiki Discovers leaf entity metadata
     ///
-    /// Reference: OpenID Federation 1.0 - Appendix A.2 The LIGO Wiki Discovers the OP's Metadata
+    /// Reference: OpenID Federation 1.0 - Appendix A.2 The LIGO Wiki Discovers leaf entity metadata
     /// https://openid.net/specs/openid-federation-1_0.html#name-the-ligo-wiki-discovers-the
     #[tokio::test]
-    async fn test_ligo_wiki_discovers_op_metadata() {
+    async fn test_ligo_wiki_discovers_leaf_metadata() {
         use crate::FederationClient;
         use wiremock::{
             matchers::{method, path},
@@ -207,18 +206,18 @@ mod tests {
         };
 
         // Start mock servers for each entity in the federation
-        let op_server = MockServer::start().await; // Represents op.localhost (OP)
+        let op_server = MockServer::start().await; // Represents op.localhost (leaf entity)
         let university_server = MockServer::start().await; // Represents university.localhost (Intermediate)
         let federation_server = MockServer::start().await; // Represents federation.localhost (Trust Anchor)
 
-        let op_url = format!("http://{}", op_server.address());
-        let university_url = format!("http://{}", university_server.address());
-        let federation_url = format!("http://{}", federation_server.address());
+        let op_url = Url::parse(&format!("http://{}", op_server.address())).unwrap();
+        let university_url = Url::parse(&format!("http://{}", university_server.address())).unwrap();
+        let federation_url = Url::parse(&format!("http://{}", federation_server.address())).unwrap();
 
         // Create test key for signing JWTs
         let encoding_key = EncodingKey::from_secret(b"test_secret_key");
 
-        // Step 1: Mock the OP's Entity Configuration
+        // Step 1: Mock the leaf Entity Configuration
         let op_entity_config = create_op_entity_configuration(&op_url, &university_url);
         let op_jwt = encode_entity_configuration(&op_entity_config, &encoding_key);
 
@@ -237,7 +236,7 @@ mod tests {
         let university_jwt = encode_subordinate_statement(&university_statement_about_op, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(university_jwt.clone())
@@ -266,7 +265,7 @@ mod tests {
         let federation_jwt = encode_subordinate_statement(&federation_statement_about_university, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(federation_jwt)
@@ -289,29 +288,25 @@ mod tests {
             .mount(&federation_server)
             .await;
 
-        // Now simulate the LIGO Wiki (Relying Party) discovering the OP's metadata
+        // Now simulate the LIGO Wiki (Relying Party/verifier) discovering the leaf metadata
         let client = FederationClient::new();
+        let op_entity_id = op_url.clone();
+        let federation_entity_id = federation_url.clone();
 
-        // Step 6: LIGO Wiki fetches the OP's Entity Configuration
-        let op_entity_id = Url::parse(&op_url).unwrap();
-        let op_config_response = client.fetch_entity_configuration(&op_entity_id).await;
+        // Step 6 & 7: LIGO Wiki discovers the leaf trust chain up to the trust anchor
+        let trust_chain = client
+            .discover_trust_chain(&op_entity_id, Some(&[federation_entity_id]))
+            .await
+            .expect("trust chain discovery should succeed");
 
-        // Check if the response failed and print the error for debugging
-        if let Err(ref e) = op_config_response {
-            println!("Failed to fetch entity configuration: {:?}", e);
-        }
-        assert!(op_config_response.is_ok(), "Failed to fetch OP entity configuration");
-
-        // Step 7: Build and validate the trust chain
-        let trust_chain = TrustChain::new(vec![op_config_response.unwrap(), university_jwt, federation_config_jwt]);
-
-        // Note: In a real implementation, you would validate the trust chain with proper signature verification
-        // let validator = TrustChainValidator::new();
-        // let validated_chain = validator.validate_trust_chain(&trust_chain).unwrap();
-
-        // Verify the trust chain structure is correct
-        assert_eq!(trust_chain.len(), 3);
-        assert!(!trust_chain.is_empty());
+        assert!(
+            !trust_chain.chain.is_empty(),
+            "Discovered trust chain should not be empty"
+        );
+        assert!(
+            trust_chain.chain.len() >= 2,
+            "Trust chain must include at least leaf and anchor"
+        );
 
         // The test successfully demonstrates the federation discovery flow described in Appendix A.2
     }
@@ -329,19 +324,19 @@ mod tests {
         };
 
         // Start mock servers for the federation entities
-        let op_server = MockServer::start().await; // OpenID Provider
+        let op_server = MockServer::start().await; // Leaf entity in this registration scenario
         let client_server = MockServer::start().await; // Client/Relying Party
         let federation_server = MockServer::start().await; // Trust Anchor
 
-        let op_url = format!("http://{}", op_server.address());
-        let client_url = format!("http://{}", client_server.address());
-        let federation_url = format!("http://{}", federation_server.address());
+        let op_url = Url::parse(&format!("http://{}", op_server.address())).unwrap();
+        let client_url = Url::parse(&format!("http://{}", client_server.address())).unwrap();
+        let federation_url = Url::parse(&format!("http://{}", federation_server.address())).unwrap();
 
         let encoding_key = EncodingKey::from_secret(b"test_secret_key");
 
         // === PART 1: Test Explicit Client Registration ===
 
-        // Step 1: Mock the OP's Entity Configuration with client registration endpoint
+        // Step 1: Mock the leaf Entity Configuration with client registration endpoint
         let op_config = create_op_with_registration_endpoint(&op_url, &federation_url);
         let op_jwt = encode_entity_configuration(&op_config, &encoding_key);
 
@@ -396,7 +391,7 @@ mod tests {
         let federation_client_jwt = encode_subordinate_statement(&federation_statement_about_client, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(federation_client_jwt.clone())
@@ -419,12 +414,12 @@ mod tests {
             .mount(&federation_server)
             .await;
 
-        // Step 6: Mock the Federation's Subordinate Statement about the OP
+        // Step 6: Mock the trust anchor Subordinate Statement about the leaf
         let federation_statement_about_op = create_federation_statement_about_op(&federation_url, &op_url);
         let federation_op_jwt = encode_subordinate_statement(&federation_statement_about_op, &encoding_key);
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
+            .and(path("/federation_fetch_endpoint"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(federation_op_jwt.clone())
@@ -437,39 +432,39 @@ mod tests {
 
         let federation_client = FederationClient::new();
 
-        // Test 1: Verify we can fetch the OP's configuration (needed for both registration methods)
-        let op_entity_id = Url::parse(&op_url).unwrap();
+        // Test 1: Verify we can fetch the leaf configuration (needed for both registration methods)
+        let op_entity_id = op_url.clone();
         let op_config_response = federation_client.fetch_entity_configuration(&op_entity_id).await;
-        assert!(op_config_response.is_ok(), "Failed to fetch OP entity configuration");
+        assert!(op_config_response.is_ok(), "Failed to fetch leaf entity configuration");
 
         // Test 2: Verify we can fetch the client's configuration (for automatic registration)
-        let client_entity_id = Url::parse(&client_url).unwrap();
+        let client_entity_id = client_url.clone();
         let client_config_response = federation_client.fetch_entity_configuration(&client_entity_id).await;
         assert!(
             client_config_response.is_ok(),
             "Failed to fetch client entity configuration"
         );
 
-        // Test 3: Build trust chains for both OP and Client (for automatic registration)
-        let op_trust_chain = TrustChain::new(vec![
+        // Test 3: Build trust chains for both leaf and client (for automatic registration)
+        let op_trust_chain = TrustChain::try_new(vec![
             op_config_response.unwrap(),
             federation_op_jwt,
             federation_config_jwt.clone(),
-        ]);
+        ])
+        .unwrap();
 
-        let client_trust_chain = TrustChain::new(vec![
+        let client_trust_chain = TrustChain::try_new(vec![
             client_config_response.unwrap(),
             federation_client_jwt,
             federation_config_jwt,
-        ]);
+        ])
+        .unwrap();
 
         // Verify both trust chains are properly structured
         assert_eq!(op_trust_chain.len(), 3);
         assert_eq!(client_trust_chain.len(), 3);
-        assert!(!op_trust_chain.is_empty());
-        assert!(!client_trust_chain.is_empty());
 
-        // In a real implementation, the OP would:
+        // In a real implementation, the verifier handling the leaf registration would:
         // 1. For explicit registration: validate the registration request and create client credentials
         // 2. For automatic registration: validate the client's trust chain and automatically register the client
 
@@ -504,36 +499,10 @@ mod tests {
         }
     }
 
-    fn create_test_rsa_key() -> Jwk {
-        Jwk {
-            kty: "RSA".to_string(),
-            use_: None,
-            key_ops: None,
-            alg: None,
-            kid: Some("dEEtRjlzY3djcENuT01wOGxrZlkxb3RIQVJlMTY0...".to_string()),
-            x5u: None,
-            x5c: None,
-            x5t: None,
-            x5t_s256: None,
-            n: Some("x97YKqc9Cs-DNtFrQ7_vhXoH9bwkDWW6En2jJ044yH...".to_string()),
-            e: Some("AQAB".to_string()),
-            d: None,
-            p: None,
-            q: None,
-            dp: None,
-            dq: None,
-            qi: None,
-            crv: None,
-            x: None,
-            y: None,
-            k: None,
-        }
-    }
-
-    fn create_op_entity_configuration(op_url: &str, university_url: &str) -> EntityConfiguration {
-        let entity_id = Url::parse(op_url).unwrap();
+    fn create_op_entity_configuration(op_url: &Url, university_url: &Url) -> EntityConfiguration {
+        let entity_id = op_url.clone();
         let mut jwks = JwkSet::new();
-        jwks.add_key(create_test_rsa_key());
+        jwks.add_key(create_test_symmetric_key());
 
         let exp = expires_in(Duration::hours(24));
         let iat = chrono::Utc::now().timestamp();
@@ -585,7 +554,7 @@ mod tests {
             op_policy_uri: Some(
                 Url::parse(&format!(
                     "{}/en/website/legal-information/",
-                    op_url.replace("//127.0.0.1", "//www.localhost")
+                    op_url.as_str().replace("//127.0.0.1", "//www.localhost")
                 ))
                 .unwrap(),
             ),
@@ -596,7 +565,7 @@ mod tests {
             logo_uri: Some(
                 Url::parse(&format!(
                     "{}/img/localhost-logo-left-neg-SE.svg",
-                    op_url.replace("//127.0.0.1", "//www.localhost")
+                    op_url.as_str().replace("//127.0.0.1", "//www.localhost")
                 ))
                 .unwrap(),
             ),
@@ -604,12 +573,12 @@ mod tests {
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
             .with_metadata(metadata)
-            .with_authority_hints(vec![Url::parse(university_url).unwrap()])
+            .with_authority_hints(vec![university_url.clone()])
     }
 
-    fn create_university_subordinate_statement_about_op(university_url: &str, op_url: &str) -> SubordinateStatement {
-        let issuer = Url::parse(university_url).unwrap();
-        let subject = Url::parse(op_url).unwrap();
+    fn create_university_subordinate_statement_about_op(university_url: &Url, op_url: &Url) -> SubordinateStatement {
+        let issuer = university_url.clone();
+        let subject = op_url.clone();
         let exp = expires_in(Duration::hours(1));
         let iat = chrono::Utc::now().timestamp();
 
@@ -619,8 +588,8 @@ mod tests {
         SubordinateStatement::new(issuer, subject, exp, iat, jwks)
     }
 
-    fn create_university_entity_configuration(university_url: &str, federation_url: &str) -> EntityConfiguration {
-        let entity_id = Url::parse(university_url).unwrap();
+    fn create_university_entity_configuration(university_url: &Url, federation_url: &Url) -> EntityConfiguration {
+        let entity_id = university_url.clone();
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
 
@@ -634,8 +603,8 @@ mod tests {
             policy_uri: None,
             logo_uri: None,
             contacts: Some(vec!["admin@university.localhost".to_string()]),
-            federation_fetch_endpoint: Some(Url::parse(&format!("{}/fetch", university_url)).unwrap()),
-            federation_list_endpoint: Some(Url::parse(&format!("{}/list", university_url)).unwrap()),
+            federation_fetch_endpoint: Some(university_url.join("federation_fetch_endpoint").unwrap()),
+            federation_list_endpoint: Some(university_url.join("list").unwrap()),
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
             federation_historical_keys_endpoint: None,
@@ -643,15 +612,15 @@ mod tests {
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
             .with_metadata(metadata)
-            .with_authority_hints(vec![Url::parse(federation_url).unwrap()])
+            .with_authority_hints(vec![federation_url.clone()])
     }
 
     fn create_federation_statement_about_university(
-        federation_url: &str,
-        university_url: &str,
+        federation_url: &Url,
+        university_url: &Url,
     ) -> SubordinateStatement {
-        let issuer = Url::parse(federation_url).unwrap();
-        let subject = Url::parse(university_url).unwrap();
+        let issuer = federation_url.clone();
+        let subject = university_url.clone();
         let exp = expires_in(Duration::hours(1));
         let iat = chrono::Utc::now().timestamp();
 
@@ -661,8 +630,8 @@ mod tests {
         SubordinateStatement::new(issuer, subject, exp, iat, jwks)
     }
 
-    fn create_federation_entity_configuration(federation_url: &str) -> EntityConfiguration {
-        let entity_id = Url::parse(federation_url).unwrap();
+    fn create_federation_entity_configuration(federation_url: &Url) -> EntityConfiguration {
+        let entity_id = federation_url.clone();
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
 
@@ -676,9 +645,9 @@ mod tests {
             policy_uri: None,
             logo_uri: None,
             contacts: Some(vec!["admin@federation.localhost".to_string()]),
-            federation_fetch_endpoint: Some(Url::parse(&format!("{}/fetch", federation_url)).unwrap()),
-            federation_list_endpoint: Some(Url::parse(&format!("{}/list", federation_url)).unwrap()),
-            federation_resolve_endpoint: Some(Url::parse(&format!("{}/resolve", federation_url)).unwrap()),
+            federation_fetch_endpoint: Some(federation_url.join("federation_fetch_endpoint").unwrap()),
+            federation_list_endpoint: Some(federation_url.join("list").unwrap()),
+            federation_resolve_endpoint: Some(federation_url.join("resolve").unwrap()),
             federation_trust_mark_status_endpoint: None,
             federation_historical_keys_endpoint: None,
         });
@@ -688,20 +657,29 @@ mod tests {
 
     fn encode_entity_configuration(config: &EntityConfiguration, key: &EncodingKey) -> String {
         let mut header = Header::new(Algorithm::HS256);
+        header.typ = Some("entity-statement+jwt".to_string());
         header.kid = Some("test-key-1".to_string());
         encode(&header, config, key).unwrap()
     }
 
     fn encode_subordinate_statement(statement: &SubordinateStatement, key: &EncodingKey) -> String {
         let mut header = Header::new(Algorithm::HS256);
+        header.typ = Some("entity-statement+jwt".to_string());
         header.kid = Some("test-key-1".to_string());
         encode(&header, statement, key).unwrap()
     }
 
+    fn federation_header() -> Header {
+        let mut header = Header::new(Algorithm::HS256);
+        header.typ = Some("entity-statement+jwt".to_string());
+        header.kid = Some("test-key-1".to_string());
+        header
+    }
+
     // Helper functions for the Client Registration test
 
-    fn create_op_with_registration_endpoint(op_url: &str, federation_url: &str) -> EntityConfiguration {
-        let entity_id = Url::parse(op_url).unwrap();
+    fn create_op_with_registration_endpoint(op_url: &Url, federation_url: &Url) -> EntityConfiguration {
+        let entity_id = op_url.clone();
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
 
@@ -756,11 +734,11 @@ mod tests {
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
             .with_metadata(metadata)
-            .with_authority_hints(vec![Url::parse(federation_url).unwrap()])
+            .with_authority_hints(vec![federation_url.clone()])
     }
 
-    fn create_client_entity_configuration(client_url: &str, federation_url: &str) -> EntityConfiguration {
-        let entity_id = Url::parse(client_url).unwrap();
+    fn create_client_entity_configuration(client_url: &Url, federation_url: &Url) -> EntityConfiguration {
+        let entity_id = client_url.clone();
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
 
@@ -803,12 +781,12 @@ mod tests {
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
             .with_metadata(metadata)
-            .with_authority_hints(vec![Url::parse(federation_url).unwrap()])
+            .with_authority_hints(vec![federation_url.clone()])
     }
 
-    fn create_federation_statement_about_client(federation_url: &str, client_url: &str) -> SubordinateStatement {
-        let issuer = Url::parse(federation_url).unwrap();
-        let subject = Url::parse(client_url).unwrap();
+    fn create_federation_statement_about_client(federation_url: &Url, client_url: &Url) -> SubordinateStatement {
+        let issuer = federation_url.clone();
+        let subject = client_url.clone();
         let exp = expires_in(Duration::hours(1));
         let iat = chrono::Utc::now().timestamp();
 
@@ -818,9 +796,9 @@ mod tests {
         SubordinateStatement::new(issuer, subject, exp, iat, jwks)
     }
 
-    fn create_federation_statement_about_op(federation_url: &str, op_url: &str) -> SubordinateStatement {
-        let issuer = Url::parse(federation_url).unwrap();
-        let subject = Url::parse(op_url).unwrap();
+    fn create_federation_statement_about_op(federation_url: &Url, op_url: &Url) -> SubordinateStatement {
+        let issuer = federation_url.clone();
+        let subject = op_url.clone();
         let exp = expires_in(Duration::hours(1));
         let iat = chrono::Utc::now().timestamp();
 
@@ -846,15 +824,15 @@ mod tests {
         let intermediate_server = MockServer::start().await;
         let anchor_server = MockServer::start().await;
 
-        let leaf_url = format!("http://{}", leaf_server.address());
-        let intermediate_url = format!("http://{}", intermediate_server.address());
-        let anchor_url = format!("http://{}", anchor_server.address());
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let intermediate_url = Url::parse(&format!("http://{}", intermediate_server.address())).unwrap();
+        let anchor_url = Url::parse(&format!("http://{}", anchor_server.address())).unwrap(); // Ensure anchor URL is a valid URL string
 
         let encoding_key = EncodingKey::from_secret(b"test_secret_key");
 
         // Create and mock the leaf entity configuration (with intermediate as authority hint)
         let leaf_config = EntityConfiguration::new(
-            Url::parse(&leaf_url).unwrap(),
+            leaf_url.clone(),
             {
                 let mut jwks = JwkSet::new();
                 jwks.add_key(create_test_symmetric_key());
@@ -863,9 +841,9 @@ mod tests {
             expires_in(Duration::hours(24)),
             chrono::Utc::now().timestamp(),
         )
-        .with_authority_hints(vec![Url::parse(&intermediate_url).unwrap()]);
+        .with_authority_hints(vec![intermediate_url.clone()]);
 
-        let leaf_jwt = encode(&Header::new(Algorithm::HS256), &leaf_config, &encoding_key).unwrap();
+        let leaf_jwt = encode(&federation_header(), &leaf_config, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
             .and(path("/.well-known/openid-federation"))
@@ -885,7 +863,7 @@ mod tests {
             policy_uri: None,
             logo_uri: None,
             contacts: None,
-            federation_fetch_endpoint: Some(Url::parse(&format!("{}/fetch", intermediate_url)).unwrap()),
+            federation_fetch_endpoint: Some(intermediate_url.join("federation_fetch_endpoint").unwrap()),
             federation_list_endpoint: None,
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
@@ -893,7 +871,7 @@ mod tests {
         });
 
         let intermediate_config = EntityConfiguration::new(
-            Url::parse(&intermediate_url).unwrap(),
+            intermediate_url.clone(),
             {
                 let mut jwks = JwkSet::new();
                 jwks.add_key(create_test_symmetric_key());
@@ -903,9 +881,9 @@ mod tests {
             chrono::Utc::now().timestamp(),
         )
         .with_metadata(intermediate_metadata)
-        .with_authority_hints(vec![Url::parse(&anchor_url).unwrap()]);
+        .with_authority_hints(vec![anchor_url.clone()]);
 
-        let intermediate_jwt = encode(&Header::new(Algorithm::HS256), &intermediate_config, &encoding_key).unwrap();
+        let intermediate_jwt = encode(&federation_header(), &intermediate_config, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
             .and(path("/.well-known/openid-federation"))
@@ -922,19 +900,18 @@ mod tests {
         intermediate_signing_jwks.add_key(create_test_symmetric_key());
 
         let subordinate_stmt = SubordinateStatement::new(
-            Url::parse(&intermediate_url).unwrap(),
-            Url::parse(&leaf_url).unwrap(),
+            intermediate_url.clone(),
+            leaf_url.clone(),
             expires_in(Duration::hours(1)),
             chrono::Utc::now().timestamp(),
             intermediate_signing_jwks,
         );
 
-        let subordinate_jwt = encode(&Header::new(Algorithm::HS256), &subordinate_stmt, &encoding_key).unwrap();
+        let subordinate_jwt = encode(&federation_header(), &subordinate_stmt, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
-            .and(query_param("iss", Url::parse(&intermediate_url).unwrap().as_str()))
-            .and(query_param("sub", Url::parse(&leaf_url).unwrap().as_str()))
+            .and(path("/federation_fetch_endpoint"))
+            .and(query_param("sub", leaf_url.as_str()))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(subordinate_jwt.clone())
@@ -946,7 +923,7 @@ mod tests {
         // Create and mock the anchor entity configuration
         let anchor_config = create_federation_entity_configuration(&anchor_url);
 
-        let anchor_jwt = encode(&Header::new(Algorithm::HS256), &anchor_config, &encoding_key).unwrap();
+        let anchor_jwt = encode(&federation_header(), &anchor_config, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
             .and(path("/.well-known/openid-federation"))
@@ -963,20 +940,18 @@ mod tests {
         anchor_signing_jwks.add_key(create_test_symmetric_key());
 
         let anchor_subordinate_stmt = SubordinateStatement::new(
-            Url::parse(&anchor_url).unwrap(),
-            Url::parse(&intermediate_url).unwrap(),
+            anchor_url.clone(),
+            intermediate_url.clone(),
             expires_in(Duration::hours(1)),
             chrono::Utc::now().timestamp(),
             anchor_signing_jwks,
         );
 
-        let anchor_subordinate_jwt =
-            encode(&Header::new(Algorithm::HS256), &anchor_subordinate_stmt, &encoding_key).unwrap();
+        let anchor_subordinate_jwt = encode(&federation_header(), &anchor_subordinate_stmt, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
-            .and(query_param("iss", Url::parse(&anchor_url).unwrap().as_str()))
-            .and(query_param("sub", Url::parse(&intermediate_url).unwrap().as_str()))
+            .and(path("/federation_fetch_endpoint"))
+            .and(query_param("sub", intermediate_url.as_str()))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(anchor_subordinate_jwt)
@@ -987,19 +962,18 @@ mod tests {
 
         // Perform discovery
         let client = FederationClient::new();
-        let leaf_entity_id = Url::parse(&leaf_url).unwrap();
-        let trusted_anchors = vec![Url::parse(&anchor_url).unwrap()];
+        let leaf_entity_id = leaf_url.clone();
 
-        let result = client.discover_trust_chain(&leaf_entity_id, &trusted_anchors).await;
+        println!(
+            "leaf_url: {}, intermediate_url: {}, anchor_url: {}",
+            leaf_url, intermediate_url, anchor_url
+        );
+
+        let result = client.discover_trust_chain(&leaf_entity_id, Some(&[anchor_url])).await;
 
         // Verify successful discovery
-        assert!(result.is_ok(), "Discovery should succeed");
-        let trust_chain = result.unwrap();
-        assert!(!trust_chain.chain.is_empty(), "Trust chain should not be empty");
-        assert!(
-            trust_chain.chain.len() >= 2,
-            "Trust chain should have at least leaf config and statements"
-        );
+        assert!(result.is_ok(), "result: {:?}", result);
+        let _trust_chain = result.unwrap();
     }
 
     /// Test 2: Error handling - untrusted path (discovered entity not in trusted-anchor set)
@@ -1014,15 +988,15 @@ mod tests {
         let leaf_server = MockServer::start().await;
         let intermediate_server = MockServer::start().await;
 
-        let leaf_url = format!("http://{}", leaf_server.address());
-        let intermediate_url = format!("http://{}", intermediate_server.address());
-        let anchor_url = "http://untrusted.anchor.local"; // Not a real server
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let intermediate_url = Url::parse(&format!("http://{}", intermediate_server.address())).unwrap();
+        let anchor_url = Url::parse("http://untrusted.anchor.local").unwrap(); // Not a real server
 
-        let encoding_key = EncodingKey::from_secret(b"test_secret");
+        let encoding_key = EncodingKey::from_secret(b"test_secret_key");
 
         // Mock leaf with intermediate as authority hint
         let leaf_config = EntityConfiguration::new(
-            Url::parse(&leaf_url).unwrap(),
+            leaf_url.clone(),
             {
                 let mut jwks = JwkSet::new();
                 jwks.add_key(create_test_symmetric_key());
@@ -1031,9 +1005,9 @@ mod tests {
             expires_in(Duration::hours(24)),
             chrono::Utc::now().timestamp(),
         )
-        .with_authority_hints(vec![Url::parse(&intermediate_url).unwrap()]);
+        .with_authority_hints(vec![intermediate_url.clone()]);
 
-        let leaf_jwt = encode(&Header::new(Algorithm::HS256), &leaf_config, &encoding_key).unwrap();
+        let leaf_jwt = encode(&federation_header(), &leaf_config, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
             .and(path("/.well-known/openid-federation"))
@@ -1047,7 +1021,7 @@ mod tests {
 
         // Mock intermediate with trusted anchor as authority hint (but won't match)
         let intermediate_config = EntityConfiguration::new(
-            Url::parse(&intermediate_url).unwrap(),
+            intermediate_url.clone(),
             {
                 let mut jwks = JwkSet::new();
                 jwks.add_key(create_test_symmetric_key());
@@ -1056,9 +1030,9 @@ mod tests {
             expires_in(Duration::hours(24)),
             chrono::Utc::now().timestamp(),
         )
-        .with_authority_hints(vec![Url::parse(anchor_url).unwrap()]);
+        .with_authority_hints(vec![anchor_url.clone()]);
 
-        let intermediate_jwt = encode(&Header::new(Algorithm::HS256), &intermediate_config, &encoding_key).unwrap();
+        let intermediate_jwt = encode(&federation_header(), &intermediate_config, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
             .and(path("/.well-known/openid-federation"))
@@ -1072,10 +1046,12 @@ mod tests {
 
         // Perform discovery with a different trusted anchor
         let client = FederationClient::new();
-        let leaf_entity_id = Url::parse(&leaf_url).unwrap();
+        let leaf_entity_id = leaf_url.clone();
         let trusted_anchors = vec![Url::parse("http://different.anchor.local").unwrap()]; // Different anchor
 
-        let result = client.discover_trust_chain(&leaf_entity_id, &trusted_anchors).await;
+        let result = client
+            .discover_trust_chain(&leaf_entity_id, Some(&trusted_anchors))
+            .await;
 
         // Verify discovery fails due to no path to trusted anchor
         assert!(
@@ -1096,14 +1072,14 @@ mod tests {
         let leaf_server = MockServer::start().await;
         let intermediate_server = MockServer::start().await;
 
-        let leaf_url = format!("http://{}", leaf_server.address());
-        let intermediate_url = format!("http://{}", intermediate_server.address());
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let intermediate_url = Url::parse(&format!("http://{}", intermediate_server.address())).unwrap();
 
-        let encoding_key = EncodingKey::from_secret(b"test_secret");
+        let encoding_key = EncodingKey::from_secret(b"test_secret_key");
 
         // Mock leaf with intermediate as authority hint
         let leaf_config = EntityConfiguration::new(
-            Url::parse(&leaf_url).unwrap(),
+            leaf_url.clone(),
             {
                 let mut jwks = JwkSet::new();
                 jwks.add_key(create_test_symmetric_key());
@@ -1112,9 +1088,9 @@ mod tests {
             expires_in(Duration::hours(24)),
             chrono::Utc::now().timestamp(),
         )
-        .with_authority_hints(vec![Url::parse(&intermediate_url).unwrap()]);
+        .with_authority_hints(vec![intermediate_url.clone()]);
 
-        let leaf_jwt = encode(&Header::new(Algorithm::HS256), &leaf_config, &encoding_key).unwrap();
+        let leaf_jwt = encode(&federation_header(), &leaf_config, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
             .and(path("/.well-known/openid-federation"))
@@ -1128,7 +1104,7 @@ mod tests {
 
         // Mock intermediate WITHOUT federation_fetch_endpoint
         let intermediate_config = EntityConfiguration::new(
-            Url::parse(&intermediate_url).unwrap(),
+            intermediate_url.clone(),
             {
                 let mut jwks = JwkSet::new();
                 jwks.add_key(create_test_symmetric_key());
@@ -1140,7 +1116,7 @@ mod tests {
         .with_authority_hints(vec![Url::parse("http://anchor.local").unwrap()]);
         // Note: no metadata with federation_fetch_endpoint
 
-        let intermediate_jwt = encode(&Header::new(Algorithm::HS256), &intermediate_config, &encoding_key).unwrap();
+        let intermediate_jwt = encode(&federation_header(), &intermediate_config, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
             .and(path("/.well-known/openid-federation"))
@@ -1154,10 +1130,12 @@ mod tests {
 
         // Perform discovery
         let client = FederationClient::new();
-        let leaf_entity_id = Url::parse(&leaf_url).unwrap();
+        let leaf_entity_id = leaf_url.clone();
         let trusted_anchors = vec![Url::parse("http://anchor.local").unwrap()];
 
-        let result = client.discover_trust_chain(&leaf_entity_id, &trusted_anchors).await;
+        let result = client
+            .discover_trust_chain(&leaf_entity_id, Some(&trusted_anchors))
+            .await;
 
         // Verify discovery fails due to missing fetch endpoint
         assert!(result.is_err(), "Discovery should fail when fetch endpoint is missing");
@@ -1175,10 +1153,38 @@ mod tests {
         let entity_a_server = MockServer::start().await;
         let entity_b_server = MockServer::start().await;
 
-        let entity_a_url = format!("http://{}", entity_a_server.address());
-        let entity_b_url = format!("http://{}", entity_b_server.address());
+        let entity_a_url = Url::parse(&format!("http://{}", entity_a_server.address())).unwrap();
+        let entity_b_url = Url::parse(&format!("http://{}", entity_b_server.address())).unwrap();
 
-        let encoding_key = EncodingKey::from_secret(b"test_secret");
+        let encoding_key = EncodingKey::from_secret(b"test_secret_key");
+
+        let mut entity_a_metadata = EntityMetadata::new();
+        entity_a_metadata.federation_entity = Some(FederationEntityMetadata {
+            organization_name: Some("Entity A".to_string()),
+            homepage_uri: None,
+            policy_uri: None,
+            logo_uri: None,
+            contacts: None,
+            federation_fetch_endpoint: Some(entity_a_url.join("federation_fetch_endpoint").unwrap()),
+            federation_list_endpoint: None,
+            federation_resolve_endpoint: None,
+            federation_trust_mark_status_endpoint: None,
+            federation_historical_keys_endpoint: None,
+        });
+
+        let mut entity_b_metadata = EntityMetadata::new();
+        entity_b_metadata.federation_entity = Some(FederationEntityMetadata {
+            organization_name: Some("Entity B".to_string()),
+            homepage_uri: None,
+            policy_uri: None,
+            logo_uri: None,
+            contacts: None,
+            federation_fetch_endpoint: Some(entity_b_url.join("federation_fetch_endpoint").unwrap()),
+            federation_list_endpoint: None,
+            federation_resolve_endpoint: None,
+            federation_trust_mark_status_endpoint: None,
+            federation_historical_keys_endpoint: None,
+        });
 
         // Create Entity A that points to Entity B as authority and exposes a fetch endpoint.
         let mut entity_a_metadata = EntityMetadata::new();
@@ -1188,7 +1194,7 @@ mod tests {
             policy_uri: None,
             logo_uri: None,
             contacts: None,
-            federation_fetch_endpoint: Some(Url::parse(&format!("{}/fetch", entity_a_url)).unwrap()),
+            federation_fetch_endpoint: Some(entity_a_url.join("federation_fetch_endpoint").unwrap()),
             federation_list_endpoint: None,
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
@@ -1196,7 +1202,7 @@ mod tests {
         });
 
         let entity_a_config = EntityConfiguration::new(
-            Url::parse(&entity_a_url).unwrap(),
+            entity_a_url.clone(),
             {
                 let mut jwks = JwkSet::new();
                 jwks.add_key(create_test_symmetric_key());
@@ -1206,9 +1212,9 @@ mod tests {
             chrono::Utc::now().timestamp(),
         )
         .with_metadata(entity_a_metadata)
-        .with_authority_hints(vec![Url::parse(&entity_b_url).unwrap()]);
+        .with_authority_hints(vec![entity_b_url.clone()]);
 
-        let entity_a_jwt = encode(&Header::new(Algorithm::HS256), &entity_a_config, &encoding_key).unwrap();
+        let entity_a_jwt = encode(&federation_header(), &entity_a_config, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
             .and(path("/.well-known/openid-federation"))
@@ -1228,7 +1234,7 @@ mod tests {
             policy_uri: None,
             logo_uri: None,
             contacts: None,
-            federation_fetch_endpoint: Some(Url::parse(&format!("{}/fetch", entity_b_url)).unwrap()),
+            federation_fetch_endpoint: Some(entity_b_url.join("federation_fetch_endpoint").unwrap()),
             federation_list_endpoint: None,
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
@@ -1236,7 +1242,7 @@ mod tests {
         });
 
         let entity_b_config = EntityConfiguration::new(
-            Url::parse(&entity_b_url).unwrap(),
+            entity_b_url.clone(),
             {
                 let mut jwks = JwkSet::new();
                 jwks.add_key(create_test_symmetric_key());
@@ -1246,9 +1252,9 @@ mod tests {
             chrono::Utc::now().timestamp(),
         )
         .with_metadata(entity_b_metadata)
-        .with_authority_hints(vec![Url::parse(&entity_a_url).unwrap()]);
+        .with_authority_hints(vec![entity_a_url.clone()]);
 
-        let entity_b_jwt = encode(&Header::new(Algorithm::HS256), &entity_b_config, &encoding_key).unwrap();
+        let entity_b_jwt = encode(&federation_header(), &entity_b_config, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
             .and(path("/.well-known/openid-federation"))
@@ -1264,22 +1270,20 @@ mod tests {
         let mut entity_b_signing_jwks = JwkSet::new();
         entity_b_signing_jwks.add_key(create_test_symmetric_key());
         let statement_b_about_a = SubordinateStatement::new(
-            Url::parse(&entity_b_url).unwrap(),
-            Url::parse(&entity_a_url).unwrap(),
+            entity_b_url.clone(),
+            entity_a_url.clone(),
             expires_in(Duration::hours(1)),
             chrono::Utc::now().timestamp(),
             entity_b_signing_jwks,
         );
-        let statement_b_about_a_jwt =
-            encode(&Header::new(Algorithm::HS256), &statement_b_about_a, &encoding_key).unwrap();
+        let b_about_a_jwt = encode(&federation_header(), &statement_b_about_a, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
-            .and(query_param("iss", Url::parse(&entity_b_url).unwrap().as_str()))
-            .and(query_param("sub", Url::parse(&entity_a_url).unwrap().as_str()))
+            .and(path("/federation_fetch_endpoint"))
+            .and(query_param("sub", entity_a_url.as_str()))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_string(statement_b_about_a_jwt)
+                    .set_body_string(b_about_a_jwt)
                     .insert_header("content-type", "application/entity-statement+jwt"),
             )
             .mount(&entity_b_server)
@@ -1289,19 +1293,17 @@ mod tests {
         let mut entity_a_signing_jwks = JwkSet::new();
         entity_a_signing_jwks.add_key(create_test_symmetric_key());
         let statement_a_about_b = SubordinateStatement::new(
-            Url::parse(&entity_a_url).unwrap(),
-            Url::parse(&entity_b_url).unwrap(),
+            entity_a_url.clone(),
+            entity_b_url.clone(),
             expires_in(Duration::hours(1)),
             chrono::Utc::now().timestamp(),
             entity_a_signing_jwks,
         );
-        let statement_a_about_b_jwt =
-            encode(&Header::new(Algorithm::HS256), &statement_a_about_b, &encoding_key).unwrap();
+        let statement_a_about_b_jwt = encode(&federation_header(), &statement_a_about_b, &encoding_key).unwrap();
 
         Mock::given(method("GET"))
-            .and(path("/fetch"))
-            .and(query_param("iss", Url::parse(&entity_a_url).unwrap().as_str()))
-            .and(query_param("sub", Url::parse(&entity_b_url).unwrap().as_str()))
+            .and(path("/federation_fetch_endpoint"))
+            .and(query_param("sub", entity_b_url.as_str()))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(statement_a_about_b_jwt)
@@ -1312,10 +1314,10 @@ mod tests {
 
         // Perform discovery - should detect the loop
         let client = FederationClient::new();
-        let entity_a_id = Url::parse(&entity_a_url).unwrap();
+        let entity_a_id = entity_a_url.clone();
         let trusted_anchors = vec![Url::parse("http://trusted.anchor.local").unwrap()]; // Non-existent anchor
 
-        let result = client.discover_trust_chain(&entity_a_id, &trusted_anchors).await;
+        let result = client.discover_trust_chain(&entity_a_id, Some(&trusted_anchors)).await;
 
         // Verify discovery fails due to loop detection
         assert!(result.is_err(), "Discovery should fail due to loop detection");
@@ -1333,7 +1335,7 @@ mod tests {
         use chrono::Utc;
 
         // Create a trust chain with multiple JWTs having different expiration times
-        let encoding_key = EncodingKey::from_secret(b"test_secret");
+        let encoding_key = EncodingKey::from_secret(b"test_secret_key");
 
         // Create three statements with different expiration times
         let now = Utc::now().timestamp();
@@ -1355,29 +1357,26 @@ mod tests {
             now,
         );
 
-        let jwt1 = encode(&Header::new(Algorithm::HS256), &stmt1, &encoding_key).unwrap();
+        let jwt1 = encode(&federation_header(), &stmt1, &encoding_key).unwrap();
 
-        // Statement 2: Medium expiration
-        let stmt2 = EntityConfiguration::new(
-            Url::parse("http://entity2.local").unwrap(),
-            jwks.clone(),
+        // Statement 2: Medium expiration (subordinate statement)
+        let stmt2 = SubordinateStatement::new(
+            Url::parse("http://entity3.local").unwrap(),
+            Url::parse("http://entity1.local").unwrap(),
             medium_exp,
             now,
+            jwks.clone(),
         );
 
-        let jwt2 = encode(&Header::new(Algorithm::HS256), &stmt2, &encoding_key).unwrap();
+        let jwt2 = encode(&federation_header(), &stmt2, &encoding_key).unwrap();
 
-        // Statement 3: Long expiration
+        // Statement 3: Long expiration (trust anchor configuration)
         let stmt3 = EntityConfiguration::new(Url::parse("http://entity3.local").unwrap(), jwks, long_exp, now);
 
-        let jwt3 = encode(&Header::new(Algorithm::HS256), &stmt3, &encoding_key).unwrap();
+        let jwt3 = encode(&federation_header(), &stmt3, &encoding_key).unwrap();
 
-        // Create trust chain
-        let trust_chain = TrustChain {
-            chain: vec![jwt1, jwt2, jwt3],
-            metadata: None,
-            trust_marks: None,
-        };
+        // Create validated trust chain
+        let trust_chain = TrustChain::try_new(vec![jwt1, jwt2, jwt3]).unwrap();
 
         // Verify expiration is the minimum
         let exp_timestamp = trust_chain.expiration_timestamp().unwrap();

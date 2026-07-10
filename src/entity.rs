@@ -1,12 +1,13 @@
 //! Subordinate Statement and Entity Configuration structures.
 
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
 use crate::{
     Constraints, EntityId, EntityMetadata, FederationError, FederationResult, JwkSet, JwtClaims, PolicyLanguage,
     TrustMark, TrustMarkIssuers, TrustMarkOwners,
 };
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Subordinate Statement as defined in the OpenID Federation specification.
 ///
