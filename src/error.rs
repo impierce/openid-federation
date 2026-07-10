@@ -44,6 +44,9 @@ pub enum FederationError {
     /// Federation configuration error
     #[error("Federation configuration error: {0}")]
     Configuration(String),
+
+    #[error("Invalid JWT header 'typ' claim: {0}")]
+    InvalidJwtHeaderTyp(String),
 }
 
 /// Result type for OpenID Federation operations.

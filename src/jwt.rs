@@ -64,12 +64,12 @@ impl JwtArtifactType {
     pub fn validate_header_typ(&self, header_typ: Option<&str>) -> FederationResult<()> {
         let expected = self.header_value();
         match header_typ {
-            None => Err(FederationError::InvalidSubordinateStatement(format!(
+            None => Err(FederationError::InvalidJwtHeaderTyp(format!(
                 "JWT header missing required 'typ' claim (expected: {})",
                 expected
             ))),
             Some(actual) if actual == expected => Ok(()),
-            Some(actual) => Err(FederationError::InvalidSubordinateStatement(format!(
+            Some(actual) => Err(FederationError::InvalidJwtHeaderTyp(format!(
                 "JWT 'typ' mismatch: expected '{}', got '{}'",
                 expected, actual
             ))),
