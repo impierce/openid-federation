@@ -267,7 +267,13 @@ impl FederationClient {
                             .await
                         {
                             Ok(()) => return Ok(()),
-                            Err(_) => {
+                            Err(err) => {
+                                if let FederationError::EntityResolution(msg) = &err {
+                                    if msg.to_lowercase().contains("loop") {
+                                        return Err(err);
+                                    }
+                                }
+
                                 // Remove this superior from chain and try next one
                                 if chain.len() >= 2 {
                                     chain.remove(chain.len() - 2);

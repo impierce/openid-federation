@@ -22,8 +22,8 @@ pub enum FederationError {
     Http(#[from] reqwest::Error),
 
     /// Invalid entity statement
-    #[error("Invalid entity statement: {0}")]
-    InvalidEntityStatement(String),
+    #[error("Invalid subordinate statement: {0}")]
+    InvalidSubordinateStatement(String),
 
     /// Trust chain validation error
     #[error("Trust chain validation error: {0}")]

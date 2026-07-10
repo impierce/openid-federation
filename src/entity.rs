@@ -1,8 +1,8 @@
 //! Entity Statement and Entity Configuration structures.
 
 use crate::{
-    AuthorityHints, Constraints, EntityId, EntityMetadata, FederationError, FederationResult, JwkSet, JwtClaims,
-    PolicyLanguage, TrustMark,
+    Constraints, EntityId, EntityMetadata, FederationError, FederationResult, JwkSet, JwtClaims, PolicyLanguage,
+    TrustMark, TrustMarkIssuers, TrustMarkOwners,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -13,35 +13,21 @@ use std::collections::HashMap;
 /// Reference: OpenID Federation 1.0 - Section 3.1 Entity Statement
 /// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EntityStatement {
-    /// Standard JWT claims
+pub struct SubordinateStatement {
     #[serde(flatten)]
     pub claims: JwtClaims,
-    /// JSON Web Key Set
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jwks: Option<JwkSet>,
-    /// Entity metadata
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<EntityMetadata>,
-    /// Metadata policy
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata_policy: Option<HashMap<String, HashMap<String, PolicyLanguage>>>,
-    /// Constraints
     #[serde(skip_serializing_if = "Option::is_none")]
     pub constraints: Option<Constraints>,
     /// Critical extensions
     #[serde(skip_serializing_if = "Option::is_none")]
     pub crit: Option<Vec<String>>,
-    /// Metadata policy critical
+    pub jwks: JwkSet,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<EntityMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_policy: Option<HashMap<String, HashMap<String, PolicyLanguage>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_policy_crit: Option<Vec<String>>,
-    /// Trust marks
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trust_marks: Option<Vec<TrustMark>>,
-    /// Authority hints
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub authority_hints: Option<AuthorityHints>,
-    /// Source endpoint
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_endpoint: Option<String>,
 }
@@ -52,28 +38,32 @@ pub struct EntityStatement {
 /// https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntityConfiguration {
-    /// Standard JWT claims
+    // Required if the entity is not the trust anchor, but a leaf or intermediate entity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_hints: Option<Vec<EntityId>>,
     #[serde(flatten)]
     pub claims: JwtClaims,
-    /// JSON Web Key Set
-    pub jwks: JwkSet,
-    /// Entity metadata
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<EntityMetadata>,
-    /// Authority hints
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub authority_hints: Option<AuthorityHints>,
     /// Critical extensions
     #[serde(skip_serializing_if = "Option::is_none")]
     pub crit: Option<Vec<String>>,
-    /// Trust marks
+    pub jwks: JwkSet,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<EntityMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_anchor_hints: Option<Vec<EntityId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_marks: Option<Vec<TrustMark>>,
+    // Only allowed if the entity is a trust anchor, otherwise IGNORE.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_mark_issuers: Option<TrustMarkIssuers>,
+    // Only allowed if the entity is a trust anchor, otherwise IGNORE.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_mark_owners: Option<TrustMarkOwners>,
 }
 
-impl EntityStatement {
+impl SubordinateStatement {
     /// Create a new Entity Statement.
-    pub fn new(issuer: EntityId, subject: EntityId, exp: i64, iat: i64) -> Self {
+    pub fn new(issuer: EntityId, subject: EntityId, exp: i64, iat: i64, jwks: JwkSet) -> Self {
         let claims = JwtClaims {
             iss: issuer,
             sub: subject,
@@ -87,21 +77,19 @@ impl EntityStatement {
 
         Self {
             claims,
-            jwks: None,
+            jwks,
             metadata: None,
             metadata_policy: None,
             constraints: None,
             crit: None,
             metadata_policy_crit: None,
-            trust_marks: None,
-            authority_hints: None,
             source_endpoint: None,
         }
     }
 
     /// Set the JWK Set for this entity statement.
     pub fn with_jwks(mut self, jwks: JwkSet) -> Self {
-        self.jwks = Some(jwks);
+        self.jwks = jwks;
         self
     }
 
@@ -123,36 +111,20 @@ impl EntityStatement {
         self
     }
 
-    /// Set the trust marks for this entity statement.
-    pub fn with_trust_marks(mut self, trust_marks: Vec<TrustMark>) -> Self {
-        self.trust_marks = Some(trust_marks);
-        self
-    }
-
-    /// Set the authority hints for this entity statement.
-    pub fn with_authority_hints(mut self, authority_hints: AuthorityHints) -> Self {
-        self.authority_hints = Some(authority_hints);
-        self
-    }
-
     /// Validate the entity statement structure.
     ///
     /// Reference: OpenID Federation 1.0 - Section 3.1.1 Entity Statement Validation
     /// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-validation
     pub fn validate(&self) -> FederationResult<()> {
-        // Basic validation
         if self.claims.iss == self.claims.sub {
-            // Self-signed entity configuration
-            if self.jwks.is_none() {
-                return Err(FederationError::InvalidEntityStatement(
-                    "Self-signed entity statement must contain jwks".to_string(),
-                ));
-            }
+            return Err(FederationError::InvalidSubordinateStatement(
+                "Subordinate Statements cannot be self-signed".to_string(),
+            ));
         }
 
         // Check expiration
         if self.claims.exp < Utc::now().timestamp() {
-            return Err(FederationError::InvalidEntityStatement(
+            return Err(FederationError::InvalidSubordinateStatement(
                 "Entity statement has expired".to_string(),
             ));
         }
@@ -160,7 +132,7 @@ impl EntityStatement {
         // Check not before if present
         if let Some(nbf) = self.claims.nbf {
             if nbf > Utc::now().timestamp() {
-                return Err(FederationError::InvalidEntityStatement(
+                return Err(FederationError::InvalidSubordinateStatement(
                     "Entity statement is not yet valid".to_string(),
                 ));
             }
@@ -173,13 +145,13 @@ impl EntityStatement {
                 match critical_claim.as_str() {
                     "metadata_policy" => {
                         if self.metadata_policy.is_none() {
-                            return Err(FederationError::InvalidEntityStatement(
+                            return Err(FederationError::InvalidSubordinateStatement(
                                 "Critical metadata_policy claim missing".to_string(),
                             ));
                         }
                     }
                     _ => {
-                        return Err(FederationError::InvalidEntityStatement(format!(
+                        return Err(FederationError::InvalidSubordinateStatement(format!(
                             "Unknown critical claim: {}",
                             critical_claim
                         )));
@@ -189,11 +161,6 @@ impl EntityStatement {
         }
 
         Ok(())
-    }
-
-    /// Check if this is a self-signed entity configuration.
-    pub fn is_self_signed(&self) -> bool {
-        self.claims.iss == self.claims.sub
     }
 }
 
@@ -217,7 +184,10 @@ impl EntityConfiguration {
             metadata: None,
             authority_hints: None,
             crit: None,
+            trust_anchor_hints: None,
             trust_marks: None,
+            trust_mark_issuers: None,
+            trust_mark_owners: None,
         }
     }
 
@@ -228,14 +198,32 @@ impl EntityConfiguration {
     }
 
     /// Set the authority hints for this entity configuration.
-    pub fn with_authority_hints(mut self, authority_hints: AuthorityHints) -> Self {
+    pub fn with_authority_hints(mut self, authority_hints: Vec<EntityId>) -> Self {
         self.authority_hints = Some(authority_hints);
+        self
+    }
+
+    /// Set the trust anchor hints for this entity configuration.
+    pub fn with_trust_anchor_hints(mut self, trust_anchor_hints: Vec<EntityId>) -> Self {
+        self.trust_anchor_hints = Some(trust_anchor_hints);
         self
     }
 
     /// Set the trust marks for this entity configuration.
     pub fn with_trust_marks(mut self, trust_marks: Vec<TrustMark>) -> Self {
         self.trust_marks = Some(trust_marks);
+        self
+    }
+
+    /// Set the trust mark issuers for this entity configuration.
+    pub fn with_trust_mark_issuers(mut self, trust_mark_issuers: TrustMarkIssuers) -> Self {
+        self.trust_mark_issuers = Some(trust_mark_issuers);
+        self
+    }
+
+    /// Set the trust mark owners for this entity configuration.
+    pub fn with_trust_mark_owners(mut self, trust_mark_owners: TrustMarkOwners) -> Self {
+        self.trust_mark_owners = Some(trust_mark_owners);
         self
     }
 
@@ -246,21 +234,21 @@ impl EntityConfiguration {
     pub fn validate(&self) -> FederationResult<()> {
         // Entity configuration must be self-signed
         if self.claims.iss != self.claims.sub {
-            return Err(FederationError::InvalidEntityStatement(
+            return Err(FederationError::InvalidSubordinateStatement(
                 "Entity configuration must be self-signed (iss == sub)".to_string(),
             ));
         }
 
         // Must have jwks
         if self.jwks.keys.is_empty() {
-            return Err(FederationError::InvalidEntityStatement(
+            return Err(FederationError::InvalidSubordinateStatement(
                 "Entity configuration must contain at least one key in jwks".to_string(),
             ));
         }
 
         // Check expiration
         if self.claims.exp < Utc::now().timestamp() {
-            return Err(FederationError::InvalidEntityStatement(
+            return Err(FederationError::InvalidSubordinateStatement(
                 "Entity configuration has expired".to_string(),
             ));
         }
@@ -268,7 +256,7 @@ impl EntityConfiguration {
         // Check not before if present
         if let Some(nbf) = self.claims.nbf {
             if nbf > Utc::now().timestamp() {
-                return Err(FederationError::InvalidEntityStatement(
+                return Err(FederationError::InvalidSubordinateStatement(
                     "Entity configuration is not yet valid".to_string(),
                 ));
             }
@@ -277,23 +265,16 @@ impl EntityConfiguration {
         Ok(())
     }
 
-    /// Check if this is a self-signed entity configuration.
-    pub fn is_self_signed(&self) -> bool {
-        self.claims.iss == self.claims.sub
-    }
-
     /// Convert this entity configuration to an entity statement.
-    pub fn to_entity_statement(&self) -> EntityStatement {
-        EntityStatement {
+    pub fn to_subordinate_statement(&self) -> SubordinateStatement {
+        SubordinateStatement {
             claims: self.claims.clone(),
-            jwks: Some(self.jwks.clone()),
-            metadata: self.metadata.clone(),
-            metadata_policy: None,
             constraints: None,
             crit: self.crit.clone(),
+            jwks: self.jwks.clone(),
+            metadata: self.metadata.clone(),
+            metadata_policy: None,
             metadata_policy_crit: None,
-            trust_marks: self.trust_marks.clone(),
-            authority_hints: self.authority_hints.clone(),
             source_endpoint: None,
         }
     }

@@ -1,5 +1,6 @@
 //! Common types used throughout the OpenID Federation implementation.
 
+use crate::{jwt::JwtClaims, JwkSet};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
@@ -17,12 +18,6 @@ pub type RawJwkSet = HashMap<String, serde_json::Value>;
 
 /// Generic metadata type for flexibility.
 pub type Metadata = HashMap<String, serde_json::Value>;
-
-/// Authority hints - URLs of immediate superior entities.
-///
-/// Reference: OpenID Federation 1.0 - Section 3.1.2 Authority Hints
-/// https://openid.net/specs/openid-federation-1_0.html#name-authority-hints
-pub type AuthorityHints = Vec<EntityId>;
 
 /// Entity types as defined in the OpenID Federation specification.
 ///
@@ -51,18 +46,51 @@ pub enum EntityType {
 /// https://openid.net/specs/openid-federation-1_0.html#name-trust-marks
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrustMark {
-    /// Trust mark identifier
-    pub id: String,
-    /// Trust mark issuer
-    pub trust_mark_issuer: EntityId,
-    /// Trust mark subject
+    // TODO: exp should be OPTIONAL
+    #[serde(flatten)]
+    pub claims: JwtClaims,
+    pub trust_mark_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sub: Option<EntityId>,
-    /// Issued at timestamp (seconds since Unix epoch, per RFC 7519 §4.1.6)
-    pub iat: i64,
-    /// Expiration timestamp (seconds since Unix epoch, per RFC 7519 §4.1.4)
+    pub logo_uri: Option<Url>,
+    /// Optional reference URL to human-readable issuance details
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub exp: Option<i64>,
+    pub r#ref: Option<Url>,
+    /// The string must represent a trust mark delegation JWT
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<String>,
+}
+
+/// Trusted issuers for each trust mark type.
+///
+/// This serializes as a JSON object whose member names are trust mark type
+/// identifiers and whose values are arrays of trusted issuer entity IDs.
+/// An empty issuer array means any issuer is trusted for that trust mark type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TrustMarkIssuers {
+    #[serde(flatten)]
+    pub by_type: HashMap<String, Vec<EntityId>>,
+}
+
+/// Trust mark owner metadata for a specific trust mark type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrustMarkOwner {
+    /// Identifier of the trust mark owner.
+    pub sub: EntityId,
+    /// Owner federation entity keys used for signing.
+    pub jwks: JwkSet,
+    /// Additional owner-specific members.
+    #[serde(flatten, default)]
+    pub additional: HashMap<String, serde_json::Value>,
+}
+
+/// Trust mark owners for each trust mark type.
+///
+/// This serializes as a JSON object whose member names are trust mark type
+/// identifiers and whose values describe the owner of that trust mark type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TrustMarkOwners {
+    #[serde(flatten)]
+    pub by_type: HashMap<String, TrustMarkOwner>,
 }
 
 /// Policy language as defined in the OpenID Federation specification.

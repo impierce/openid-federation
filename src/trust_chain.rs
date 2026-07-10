@@ -1,7 +1,8 @@
 //! Trust Chain structures and validation logic.
 
 use crate::{
-    EntityConfiguration, EntityId, EntityStatement, FederationError, FederationResult, JwtArtifactType, JwtProcessor,
+    EntityConfiguration, EntityId, FederationError, FederationResult, JwtArtifactType, JwtProcessor,
+    SubordinateStatement,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -139,7 +140,8 @@ impl TrustChainValidator {
                 validated_statements.push(ValidatedEntityStatement::Configuration(verified_anchor));
             } else {
                 // Intermediate entity statements
-                let entity_statement: EntityStatement = self.jwt_processor.extract_claims_unverified(jwt_string)?;
+                let entity_statement: SubordinateStatement =
+                    self.jwt_processor.extract_claims_unverified(jwt_string)?;
 
                 entity_statement.validate()?;
 
@@ -253,7 +255,7 @@ pub enum ValidatedEntityStatement {
     /// Entity Configuration (self-signed)
     Configuration(EntityConfiguration),
     /// Entity Statement (signed by another entity)
-    Statement(EntityStatement),
+    Statement(SubordinateStatement),
 }
 
 impl ValidatedTrustChain {
@@ -274,7 +276,7 @@ impl ValidatedTrustChain {
     }
 
     /// Get all intermediate entity statements.
-    pub fn intermediate_statements(&self) -> Vec<&EntityStatement> {
+    pub fn intermediate_statements(&self) -> Vec<&SubordinateStatement> {
         self.statements
             .iter()
             .skip(1) // Skip the leaf
