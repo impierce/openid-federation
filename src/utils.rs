@@ -1,6 +1,7 @@
 //! Utility functions for OpenID Federation operations.
 
 use crate::{EntityConfiguration, EntityId, FederationError, FederationResult, JwtProcessor, TrustChain};
+use chrono::{Duration, Utc};
 use reqwest::Client;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -56,7 +57,7 @@ impl HttpClient for ReqwestHttpClient {
         let response = self
             .client
             .get(url)
-            .header("Accept", "application/entity-statement+jwt")
+            .header("Accept", "application/entity-statement+jwt") // TODO: this fn is very generic ("fetch_text") but then typed to only one type of response type?
             .send()
             .await?;
 
@@ -362,81 +363,7 @@ impl UrlValidator {
     }
 }
 
-/// Time utilities for federation operations.
-pub mod time {
-    use chrono::{Duration, Utc};
-
-    /// Get the current UTC time as seconds since Unix epoch.
-    pub fn now() -> i64 {
-        Utc::now().timestamp()
-    }
-
-    /// Get a timestamp that expires after the specified duration from now.
-    pub fn expires_in(duration: Duration) -> i64 {
-        now() + duration.num_seconds()
-    }
-
-    /// Get a timestamp that was issued the specified duration ago.
-    pub fn issued_ago(duration: Duration) -> i64 {
-        now() - duration.num_seconds()
-    }
-
-    /// Check if a timestamp is in the past (expired).
-    pub fn is_expired(timestamp: i64) -> bool {
-        timestamp < now()
-    }
-
-    /// Check if a timestamp is in the future (not yet valid).
-    pub fn is_not_yet_valid(timestamp: i64) -> bool {
-        timestamp > now()
-    }
-
-    /// Get a standard expiration time for entity configurations (24 hours from now).
-    pub fn standard_entity_config_expiry() -> i64 {
-        expires_in(Duration::hours(24))
-    }
-
-    /// Get a standard expiration time for subordinate statements (1 hour from now).
-    pub fn standard_subordinate_statement_expiry() -> i64 {
-        expires_in(Duration::hours(1))
-    }
-}
-
-/// Path building utilities for federation operations.
-pub mod path {
-    use crate::{EntityId, FederationError, FederationResult};
-
-    /// Build a trust chain discovery path.
-    pub fn build_trust_chain_path(
-        leaf_entity: &EntityId,
-        trust_anchor: &EntityId,
-        intermediates: &[EntityId],
-    ) -> FederationResult<Vec<EntityId>> {
-        let mut path = Vec::new();
-        path.push(leaf_entity.clone());
-        path.extend_from_slice(intermediates);
-        path.push(trust_anchor.clone());
-
-        // Validate that all entities in the path are valid
-        for entity_id in &path {
-            crate::UrlValidator::validate_entity_id(entity_id)?;
-        }
-
-        Ok(path)
-    }
-
-    /// Extract the domain from an entity ID.
-    pub fn extract_domain(entity_id: &EntityId) -> FederationResult<String> {
-        entity_id
-            .host_str()
-            .map(|host| host.to_string())
-            .ok_or_else(|| FederationError::Configuration("Entity ID does not have a valid host".to_string()))
-    }
-
-    /// Check if two entity IDs are in the same domain.
-    pub fn same_domain(entity1: &EntityId, entity2: &EntityId) -> FederationResult<bool> {
-        let domain1 = extract_domain(entity1)?;
-        let domain2 = extract_domain(entity2)?;
-        Ok(domain1 == domain2)
-    }
+/// Get a timestamp that expires after the specified duration from now.
+pub fn expires_in(duration: Duration) -> i64 {
+    Utc::now().timestamp() + duration.num_seconds()
 }

@@ -104,6 +104,7 @@ impl SubordinateStatement {
         self
     }
 
+    // TODO: validate JWT here as well, not only contents. This should check the exp and nbf claims already.
     /// Validate the subordinate statement structure, this does not validate the JWT and its signature.
     ///
     /// Reference: OpenID Federation 1.0 - Section 3.1.1 Subordinate Statement Validation
@@ -197,6 +198,7 @@ impl EntityConfiguration {
         self
     }
 
+    // TODO: validate JWT here as well, not only contents. This should check the exp and nbf claims already.
     /// Validate the entity configuration structure, this does not validate the JWT and its signature.
     ///
     /// Reference: OpenID Federation 1.0 - Section 3.2.1 Entity Configuration Validation

@@ -83,15 +83,12 @@ impl JwtArtifactType {
 /// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-format
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FederationJwtHeader {
-    /// Algorithm
+    // TODO: I think the KID and TYP fields are not optional
     pub alg: String,
-    /// Key ID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kid: Option<String>,
-    /// Type
     #[serde(skip_serializing_if = "Option::is_none")]
     pub typ: Option<String>,
-    /// JWT type for federation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jtyp: Option<String>,
 }

@@ -187,18 +187,11 @@ mod tests {
 
     #[test]
     fn test_time_utilities() {
-        use crate::utils::time;
-
-        let now = time::now();
-        let future = time::expires_in(Duration::hours(1));
-        let past = time::issued_ago(Duration::hours(1));
+        let now = chrono::Utc::now().timestamp();
+        let future = expires_in(Duration::hours(1));
 
         assert!(future > now);
-        assert!(past < now);
-        assert!(!time::is_expired(future));
-        assert!(time::is_expired(past));
-        assert!(time::is_not_yet_valid(future));
-        assert!(!time::is_not_yet_valid(past));
+        assert!(future > chrono::Utc::now().timestamp());
     }
 
     /// Integration test based on OpenID Federation 1.0 Appendix A.2: The LIGO Wiki Discovers the OP's Metadata
@@ -538,14 +531,12 @@ mod tests {
     }
 
     fn create_op_entity_configuration(op_url: &str, university_url: &str) -> EntityConfiguration {
-        use crate::utils::time;
-
         let entity_id = Url::parse(op_url).unwrap();
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_rsa_key());
 
-        let exp = time::standard_entity_config_expiry();
-        let iat = time::now();
+        let exp = expires_in(Duration::hours(24));
+        let iat = chrono::Utc::now().timestamp();
 
         let mut metadata = EntityMetadata::new();
         metadata.openid_provider = Some(OpenIdConnectProviderMetadata {
@@ -617,12 +608,10 @@ mod tests {
     }
 
     fn create_university_subordinate_statement_about_op(university_url: &str, op_url: &str) -> SubordinateStatement {
-        use crate::utils::time;
-
         let issuer = Url::parse(university_url).unwrap();
         let subject = Url::parse(op_url).unwrap();
-        let exp = time::standard_subordinate_statement_expiry();
-        let iat = time::now();
+        let exp = expires_in(Duration::hours(1));
+        let iat = chrono::Utc::now().timestamp();
 
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
@@ -631,14 +620,12 @@ mod tests {
     }
 
     fn create_university_entity_configuration(university_url: &str, federation_url: &str) -> EntityConfiguration {
-        use crate::utils::time;
-
         let entity_id = Url::parse(university_url).unwrap();
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
 
-        let exp = time::standard_entity_config_expiry();
-        let iat = time::now();
+        let exp = expires_in(Duration::hours(24));
+        let iat = chrono::Utc::now().timestamp();
 
         let mut metadata = EntityMetadata::new();
         metadata.federation_entity = Some(FederationEntityMetadata {
@@ -663,12 +650,10 @@ mod tests {
         federation_url: &str,
         university_url: &str,
     ) -> SubordinateStatement {
-        use crate::utils::time;
-
         let issuer = Url::parse(federation_url).unwrap();
         let subject = Url::parse(university_url).unwrap();
-        let exp = time::standard_subordinate_statement_expiry();
-        let iat = time::now();
+        let exp = expires_in(Duration::hours(1));
+        let iat = chrono::Utc::now().timestamp();
 
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
@@ -677,14 +662,12 @@ mod tests {
     }
 
     fn create_federation_entity_configuration(federation_url: &str) -> EntityConfiguration {
-        use crate::utils::time;
-
         let entity_id = Url::parse(federation_url).unwrap();
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
 
-        let exp = time::standard_entity_config_expiry();
-        let iat = time::now();
+        let exp = expires_in(Duration::hours(24));
+        let iat = chrono::Utc::now().timestamp();
 
         let mut metadata = EntityMetadata::new();
         metadata.federation_entity = Some(FederationEntityMetadata {
@@ -718,14 +701,12 @@ mod tests {
     // Helper functions for the Client Registration test
 
     fn create_op_with_registration_endpoint(op_url: &str, federation_url: &str) -> EntityConfiguration {
-        use crate::utils::time;
-
         let entity_id = Url::parse(op_url).unwrap();
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
 
-        let exp = time::standard_entity_config_expiry();
-        let iat = time::now();
+        let exp = expires_in(Duration::hours(24));
+        let iat = chrono::Utc::now().timestamp();
 
         let mut metadata = EntityMetadata::new();
         metadata.openid_provider = Some(OpenIdConnectProviderMetadata {
@@ -779,14 +760,12 @@ mod tests {
     }
 
     fn create_client_entity_configuration(client_url: &str, federation_url: &str) -> EntityConfiguration {
-        use crate::utils::time;
-
         let entity_id = Url::parse(client_url).unwrap();
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
 
-        let exp = time::standard_entity_config_expiry();
-        let iat = time::now();
+        let exp = expires_in(Duration::hours(24));
+        let iat = chrono::Utc::now().timestamp();
 
         let mut metadata = EntityMetadata::new();
         metadata.openid_relying_party = Some(OpenIdConnectRelyingPartyMetadata {
@@ -828,12 +807,10 @@ mod tests {
     }
 
     fn create_federation_statement_about_client(federation_url: &str, client_url: &str) -> SubordinateStatement {
-        use crate::utils::time;
-
         let issuer = Url::parse(federation_url).unwrap();
         let subject = Url::parse(client_url).unwrap();
-        let exp = time::standard_subordinate_statement_expiry();
-        let iat = time::now();
+        let exp = expires_in(Duration::hours(1));
+        let iat = chrono::Utc::now().timestamp();
 
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
@@ -842,12 +819,10 @@ mod tests {
     }
 
     fn create_federation_statement_about_op(federation_url: &str, op_url: &str) -> SubordinateStatement {
-        use crate::utils::time;
-
         let issuer = Url::parse(federation_url).unwrap();
         let subject = Url::parse(op_url).unwrap();
-        let exp = time::standard_subordinate_statement_expiry();
-        let iat = time::now();
+        let exp = expires_in(Duration::hours(1));
+        let iat = chrono::Utc::now().timestamp();
 
         let mut jwks = JwkSet::new();
         jwks.add_key(create_test_symmetric_key());
@@ -860,7 +835,7 @@ mod tests {
     /// Test 1: Happy path - successful single-path discovery (leaf → intermediate → anchor)
     #[tokio::test]
     async fn test_discover_trust_chain_happy_path() {
-        use crate::{utils::time, FederationClient};
+        use crate::FederationClient;
         use wiremock::{
             matchers::{method, path, query_param},
             Mock, MockServer, ResponseTemplate,
@@ -885,8 +860,8 @@ mod tests {
                 jwks.add_key(create_test_symmetric_key());
                 jwks
             },
-            time::standard_entity_config_expiry(),
-            time::now(),
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
         )
         .with_authority_hints(vec![Url::parse(&intermediate_url).unwrap()]);
 
@@ -924,8 +899,8 @@ mod tests {
                 jwks.add_key(create_test_symmetric_key());
                 jwks
             },
-            time::standard_entity_config_expiry(),
-            time::now(),
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
         )
         .with_metadata(intermediate_metadata)
         .with_authority_hints(vec![Url::parse(&anchor_url).unwrap()]);
@@ -949,8 +924,8 @@ mod tests {
         let subordinate_stmt = SubordinateStatement::new(
             Url::parse(&intermediate_url).unwrap(),
             Url::parse(&leaf_url).unwrap(),
-            time::standard_subordinate_statement_expiry(),
-            time::now(),
+            expires_in(Duration::hours(1)),
+            chrono::Utc::now().timestamp(),
             intermediate_signing_jwks,
         );
 
@@ -990,8 +965,8 @@ mod tests {
         let anchor_subordinate_stmt = SubordinateStatement::new(
             Url::parse(&anchor_url).unwrap(),
             Url::parse(&intermediate_url).unwrap(),
-            time::standard_subordinate_statement_expiry(),
-            time::now(),
+            expires_in(Duration::hours(1)),
+            chrono::Utc::now().timestamp(),
             anchor_signing_jwks,
         );
 
@@ -1030,7 +1005,7 @@ mod tests {
     /// Test 2: Error handling - untrusted path (discovered entity not in trusted-anchor set)
     #[tokio::test]
     async fn test_discover_trust_chain_untrusted_path() {
-        use crate::{utils::time, FederationClient};
+        use crate::FederationClient;
         use wiremock::{
             matchers::{method, path},
             Mock, MockServer, ResponseTemplate,
@@ -1053,8 +1028,8 @@ mod tests {
                 jwks.add_key(create_test_symmetric_key());
                 jwks
             },
-            time::standard_entity_config_expiry(),
-            time::now(),
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
         )
         .with_authority_hints(vec![Url::parse(&intermediate_url).unwrap()]);
 
@@ -1078,8 +1053,8 @@ mod tests {
                 jwks.add_key(create_test_symmetric_key());
                 jwks
             },
-            time::standard_entity_config_expiry(),
-            time::now(),
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
         )
         .with_authority_hints(vec![Url::parse(anchor_url).unwrap()]);
 
@@ -1112,7 +1087,7 @@ mod tests {
     /// Test 3: Error handling - missing fetch endpoint
     #[tokio::test]
     async fn test_discover_trust_chain_missing_fetch_endpoint() {
-        use crate::{utils::time, FederationClient};
+        use crate::FederationClient;
         use wiremock::{
             matchers::{method, path},
             Mock, MockServer, ResponseTemplate,
@@ -1134,8 +1109,8 @@ mod tests {
                 jwks.add_key(create_test_symmetric_key());
                 jwks
             },
-            time::standard_entity_config_expiry(),
-            time::now(),
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
         )
         .with_authority_hints(vec![Url::parse(&intermediate_url).unwrap()]);
 
@@ -1159,8 +1134,8 @@ mod tests {
                 jwks.add_key(create_test_symmetric_key());
                 jwks
             },
-            time::standard_entity_config_expiry(),
-            time::now(),
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
         )
         .with_authority_hints(vec![Url::parse("http://anchor.local").unwrap()]);
         // Note: no metadata with federation_fetch_endpoint
@@ -1191,7 +1166,7 @@ mod tests {
     /// Test 4: Loop protection - detects cycles in authority hints (A→B→A)
     #[tokio::test]
     async fn test_discover_trust_chain_loop_protection() {
-        use crate::{utils::time, FederationClient};
+        use crate::FederationClient;
         use wiremock::{
             matchers::{method, path, query_param},
             Mock, MockServer, ResponseTemplate,
@@ -1227,8 +1202,8 @@ mod tests {
                 jwks.add_key(create_test_symmetric_key());
                 jwks
             },
-            time::standard_entity_config_expiry(),
-            time::now(),
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
         )
         .with_metadata(entity_a_metadata)
         .with_authority_hints(vec![Url::parse(&entity_b_url).unwrap()]);
@@ -1267,8 +1242,8 @@ mod tests {
                 jwks.add_key(create_test_symmetric_key());
                 jwks
             },
-            time::standard_entity_config_expiry(),
-            time::now(),
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
         )
         .with_metadata(entity_b_metadata)
         .with_authority_hints(vec![Url::parse(&entity_a_url).unwrap()]);
@@ -1291,8 +1266,8 @@ mod tests {
         let statement_b_about_a = SubordinateStatement::new(
             Url::parse(&entity_b_url).unwrap(),
             Url::parse(&entity_a_url).unwrap(),
-            time::standard_subordinate_statement_expiry(),
-            time::now(),
+            expires_in(Duration::hours(1)),
+            chrono::Utc::now().timestamp(),
             entity_b_signing_jwks,
         );
         let statement_b_about_a_jwt =
@@ -1316,8 +1291,8 @@ mod tests {
         let statement_a_about_b = SubordinateStatement::new(
             Url::parse(&entity_a_url).unwrap(),
             Url::parse(&entity_b_url).unwrap(),
-            time::standard_subordinate_statement_expiry(),
-            time::now(),
+            expires_in(Duration::hours(1)),
+            chrono::Utc::now().timestamp(),
             entity_a_signing_jwks,
         );
         let statement_a_about_b_jwt =
