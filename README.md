@@ -10,7 +10,7 @@ This library provides comprehensive support for OpenID Federation, enabling the 
 - **Trust Chain Management**: Build and validate trust chains for federation entities
 - **JWT Processing**: Sign and verify JWTs with federation-specific extensions
 - **Metadata Handling**: Support for all entity types (Federation Entity, OpenID Provider, Relying Party, etc.)
-- **Policy Language**: Implementation of federation metadata policy language
+- **Policy Operators**: Implementation of federation metadata policy operators
 - **HTTP Client**: Built-in client for fetching entity configurations and statements
 - **Comprehensive Validation**: Full validation of subordinate statements, entity configurations, trust chains, and metadata
 
@@ -28,7 +28,7 @@ openid-federation = "0.1.0"
 ```rust
 use openid_federation::{
     EntityConfiguration, SubordinateStatement, JwkSet, FederationEntityMetadata,
-    EntityMetadata, TrustChain, TrustChainValidator
+    EntityMetadata, TrustChain
 };
 use chrono::{Duration, Utc};
 use url::Url;
@@ -51,15 +51,13 @@ metadata.federation_entity = Some(FederationEntityMetadata {
 
 config = config.with_metadata(metadata);
 
-// Validate trust chains
-let trust_chain = TrustChain::new(vec![
+// Create and validate trust chains
+let trust_chain = TrustChain::try_new(vec![
     "entity_config_jwt".to_string(),
     "intermediate_statement_jwt".to_string(), 
     "trust_anchor_config_jwt".to_string(),
 ]);
 
-let validator = TrustChainValidator::new();
-let validated_chain = validator.validate_trust_chain(&trust_chain)?;
 ```
 
 ### HTTP Client Usage
@@ -91,7 +89,7 @@ This implementation follows the OpenID Federation 1.0 specification (draft 43) a
 - Subordinate Statement format and validation
 - Entity Configuration format and validation  
 - Trust Chain construction and validation
-- Federation metadata policy language
+- Federation metadata policy operators
 - Well-known endpoint discovery
 - Federation-specific JWT claims and headers
 - Comprehensive error handling
