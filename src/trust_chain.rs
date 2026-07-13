@@ -251,7 +251,7 @@ impl TrustChain {
     fn apply_metadata_policy(
         &self,
         _metadata: &mut crate::EntityMetadata,
-        _policy: &std::collections::HashMap<String, std::collections::HashMap<String, crate::PolicyLanguage>>,
+        _policy: &std::collections::HashMap<String, std::collections::HashMap<String, crate::PolicyOperators>>,
     ) -> FederationResult<()> {
         // TODO: Implement full metadata policy application logic
         // This would involve applying each policy operator (essential, default, one_of, etc.)

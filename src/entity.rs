@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::{
-    Constraints, EntityId, EntityMetadata, FederationError, FederationResult, JwkSet, JwtClaims, PolicyLanguage,
+    Constraints, EntityId, EntityMetadata, FederationError, FederationResult, JwkSet, JwtClaims, PolicyOperators,
     TrustMark, TrustMarkIssuers, TrustMarkOwners,
 };
 
@@ -25,7 +25,7 @@ pub struct SubordinateStatement {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<EntityMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata_policy: Option<HashMap<String, HashMap<String, PolicyLanguage>>>,
+    pub metadata_policy: Option<HashMap<String, HashMap<String, PolicyOperators>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_policy_crit: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,7 +95,7 @@ impl SubordinateStatement {
         self
     }
 
-    pub fn with_metadata_policy(mut self, metadata_policy: HashMap<String, HashMap<String, PolicyLanguage>>) -> Self {
+    pub fn with_metadata_policy(mut self, metadata_policy: HashMap<String, HashMap<String, PolicyOperators>>) -> Self {
         self.metadata_policy = Some(metadata_policy);
         self
     }

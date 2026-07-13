@@ -93,12 +93,13 @@ pub struct TrustMarkOwners {
     pub by_type: HashMap<String, TrustMarkOwner>,
 }
 
-/// Policy language as defined in the OpenID Federation specification.
+/// Policy Operators as defined in the OpenID Federation specification.
+/// It's a struct, not an enum, to enable multiple operators to be used in combination as defined in the spec.
 ///
 /// Reference: OpenID Federation 1.0 - Section 7 Metadata Policy
 /// https://openid.net/specs/openid-federation-1_0.html#name-metadata-policy
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PolicyLanguage {
+pub struct PolicyOperators {
     /// Essential policy operators
     #[serde(skip_serializing_if = "Option::is_none")]
     pub essential: Option<bool>,
