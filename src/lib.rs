@@ -976,6 +976,266 @@ mod tests {
         let _trust_chain = result.unwrap();
     }
 
+    #[tokio::test]
+    async fn test_discover_all_trust_chains_returns_multiple_paths() {
+        use crate::FederationClient;
+        use wiremock::{
+            matchers::{method, path, query_param},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        async fn mock_subordinate(server: &MockServer, subject: &Url, issuer: &Url) -> String {
+            let mut jwks = JwkSet::new();
+            jwks.add_key(create_test_symmetric_key());
+
+            let statement = SubordinateStatement::new(
+                issuer.clone(),
+                subject.clone(),
+                expires_in(Duration::hours(1)),
+                chrono::Utc::now().timestamp(),
+                jwks,
+            );
+
+            let jwt = encode_subordinate_statement(&statement, &EncodingKey::from_secret(b"test_secret_key"));
+
+            Mock::given(method("GET"))
+                .and(path("/federation_fetch_endpoint"))
+                .and(query_param("sub", subject.as_str()))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_string(jwt.clone())
+                        .insert_header("content-type", "application/entity-statement+jwt"),
+                )
+                .mount(server)
+                .await;
+
+            jwt
+        }
+
+        let leaf_server = MockServer::start().await;
+        let intermediate_one_server = MockServer::start().await;
+        let intermediate_two_server = MockServer::start().await;
+        let trust_anchor_one_server = MockServer::start().await;
+        let trust_anchor_two_server = MockServer::start().await;
+
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let intermediate_one_url = Url::parse(&format!("http://{}", intermediate_one_server.address())).unwrap();
+        let intermediate_two_url = Url::parse(&format!("http://{}", intermediate_two_server.address())).unwrap();
+        let trust_anchor_one_url = Url::parse(&format!("http://{}", trust_anchor_one_server.address())).unwrap();
+        let trust_anchor_two_url = Url::parse(&format!("http://{}", trust_anchor_two_server.address())).unwrap();
+
+        let encoding_key = EncodingKey::from_secret(b"test_secret_key");
+
+        let leaf_config = EntityConfiguration::new(
+            leaf_url.clone(),
+            {
+                let mut jwks = JwkSet::new();
+                jwks.add_key(create_test_symmetric_key());
+                jwks
+            },
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
+        )
+        .with_authority_hints(vec![intermediate_one_url.clone(), intermediate_two_url.clone()]);
+
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-federation"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(encode(&federation_header(), &leaf_config, &encoding_key).unwrap())
+                    .insert_header("content-type", "application/entity-statement+jwt"),
+            )
+            .mount(&leaf_server)
+            .await;
+
+        let intermediate_one_config = EntityConfiguration::new(
+            intermediate_one_url.clone(),
+            {
+                let mut jwks = JwkSet::new();
+                jwks.add_key(create_test_symmetric_key());
+                jwks
+            },
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
+        )
+        .with_metadata({
+            let mut metadata = EntityMetadata::new();
+            metadata.federation_entity = Some(FederationEntityMetadata {
+                organization_name: Some("Intermediate One".to_string()),
+                homepage_uri: None,
+                policy_uri: None,
+                logo_uri: None,
+                contacts: None,
+                federation_fetch_endpoint: Some(intermediate_one_url.join("federation_fetch_endpoint").unwrap()),
+                federation_list_endpoint: None,
+                federation_resolve_endpoint: None,
+                federation_trust_mark_status_endpoint: None,
+                federation_historical_keys_endpoint: None,
+            });
+            metadata
+        })
+        .with_authority_hints(vec![trust_anchor_one_url.clone()]);
+
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-federation"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(encode(&federation_header(), &intermediate_one_config, &encoding_key).unwrap())
+                    .insert_header("content-type", "application/entity-statement+jwt"),
+            )
+            .mount(&intermediate_one_server)
+            .await;
+
+        let intermediate_two_config = EntityConfiguration::new(
+            intermediate_two_url.clone(),
+            {
+                let mut jwks = JwkSet::new();
+                jwks.add_key(create_test_symmetric_key());
+                jwks
+            },
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
+        )
+        .with_metadata({
+            let mut metadata = EntityMetadata::new();
+            metadata.federation_entity = Some(FederationEntityMetadata {
+                organization_name: Some("Intermediate Two".to_string()),
+                homepage_uri: None,
+                policy_uri: None,
+                logo_uri: None,
+                contacts: None,
+                federation_fetch_endpoint: Some(intermediate_two_url.join("federation_fetch_endpoint").unwrap()),
+                federation_list_endpoint: None,
+                federation_resolve_endpoint: None,
+                federation_trust_mark_status_endpoint: None,
+                federation_historical_keys_endpoint: None,
+            });
+            metadata
+        })
+        .with_authority_hints(vec![trust_anchor_two_url.clone()]);
+
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-federation"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(encode(&federation_header(), &intermediate_two_config, &encoding_key).unwrap())
+                    .insert_header("content-type", "application/entity-statement+jwt"),
+            )
+            .mount(&intermediate_two_server)
+            .await;
+
+        let trust_anchor_one_config = EntityConfiguration::new(
+            trust_anchor_one_url.clone(),
+            {
+                let mut jwks = JwkSet::new();
+                jwks.add_key(create_test_symmetric_key());
+                jwks
+            },
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
+        )
+        .with_metadata({
+            let mut metadata = EntityMetadata::new();
+            metadata.federation_entity = Some(FederationEntityMetadata {
+                organization_name: Some("Trust Anchor One".to_string()),
+                homepage_uri: None,
+                policy_uri: None,
+                logo_uri: None,
+                contacts: None,
+                federation_fetch_endpoint: Some(trust_anchor_one_url.join("federation_fetch_endpoint").unwrap()),
+                federation_list_endpoint: None,
+                federation_resolve_endpoint: None,
+                federation_trust_mark_status_endpoint: None,
+                federation_historical_keys_endpoint: None,
+            });
+            metadata
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-federation"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(encode(&federation_header(), &trust_anchor_one_config, &encoding_key).unwrap())
+                    .insert_header("content-type", "application/entity-statement+jwt"),
+            )
+            .mount(&trust_anchor_one_server)
+            .await;
+
+        let trust_anchor_two_config = EntityConfiguration::new(
+            trust_anchor_two_url.clone(),
+            {
+                let mut jwks = JwkSet::new();
+                jwks.add_key(create_test_symmetric_key());
+                jwks
+            },
+            expires_in(Duration::hours(24)),
+            chrono::Utc::now().timestamp(),
+        )
+        .with_metadata({
+            let mut metadata = EntityMetadata::new();
+            metadata.federation_entity = Some(FederationEntityMetadata {
+                organization_name: Some("Trust Anchor Two".to_string()),
+                homepage_uri: None,
+                policy_uri: None,
+                logo_uri: None,
+                contacts: None,
+                federation_fetch_endpoint: Some(trust_anchor_two_url.join("federation_fetch_endpoint").unwrap()),
+                federation_list_endpoint: None,
+                federation_resolve_endpoint: None,
+                federation_trust_mark_status_endpoint: None,
+                federation_historical_keys_endpoint: None,
+            });
+            metadata
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-federation"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(encode(&federation_header(), &trust_anchor_two_config, &encoding_key).unwrap())
+                    .insert_header("content-type", "application/entity-statement+jwt"),
+            )
+            .mount(&trust_anchor_two_server)
+            .await;
+
+        let leaf_to_intermediate_one_jwt =
+            mock_subordinate(&intermediate_one_server, &leaf_url, &intermediate_one_url).await;
+        let _leaf_to_intermediate_two_jwt =
+            mock_subordinate(&intermediate_two_server, &leaf_url, &intermediate_two_url).await;
+        let intermediate_one_to_trust_anchor_one_jwt =
+            mock_subordinate(&trust_anchor_one_server, &intermediate_one_url, &trust_anchor_one_url).await;
+        let _intermediate_two_to_trust_anchor_two_jwt =
+            mock_subordinate(&trust_anchor_two_server, &intermediate_two_url, &trust_anchor_two_url).await;
+
+        let manual_chain = vec![
+            encode(&federation_header(), &leaf_config, &encoding_key).unwrap(),
+            leaf_to_intermediate_one_jwt.clone(),
+            intermediate_one_to_trust_anchor_one_jwt.clone(),
+            encode(&federation_header(), &trust_anchor_one_config, &encoding_key).unwrap(),
+        ];
+
+        let manual_result = TrustChain::try_new(manual_chain);
+        assert!(manual_result.is_ok(), "manual chain validation: {:?}", manual_result);
+
+        let client = FederationClient::new();
+        let result = client.discover_all_trust_chains(&leaf_url).await;
+
+        assert!(result.is_ok(), "result: {:?}", result);
+        let chains = result.unwrap();
+        assert_eq!(chains.len(), 2);
+
+        let mut anchors: Vec<String> = chains
+            .iter()
+            .map(|chain| chain.trust_anchor_entity_id_and_configuration().unwrap().0.to_string())
+            .collect();
+        anchors.sort();
+
+        assert_eq!(
+            anchors,
+            vec![trust_anchor_one_url.to_string(), trust_anchor_two_url.to_string()]
+        );
+    }
+
     /// Test 2: Error handling - untrusted path (discovered entity not in trusted-anchor set)
     #[tokio::test]
     async fn test_discover_trust_chain_untrusted_path() {

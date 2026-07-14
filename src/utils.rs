@@ -196,7 +196,31 @@ impl FederationClient {
         TrustChain::try_new(chain)
     }
 
-    /// Recursively discover trust chain by traversing superiors.
+    /// Discover every structurally valid trust chain reachable from a starting entity.
+    ///
+    /// Unlike [`FederationClient::discover_trust_chain`], this method does not take a trusted-anchor
+    /// list and does not read trusted anchors from the starting entity configuration. It walks every
+    /// authority-hint branch it can resolve and returns all valid chains it finds.
+    pub async fn discover_all_trust_chains(&self, start_entity_id: &EntityId) -> FederationResult<Vec<TrustChain>> {
+        let mut discovered = Vec::new();
+        let mut visited = HashSet::new();
+        let mut chain = Vec::new();
+
+        self.discover_all_recursive(start_entity_id, &mut visited, &mut chain, &mut discovered)
+            .await?;
+
+        if discovered.is_empty() {
+            return Err(FederationError::EntityResolution("No trust chains found".to_string()));
+        }
+
+        Ok(discovered)
+    }
+
+    /// Recursively discover one anchored trust chain by traversing superiors.
+    ///
+    /// Keep this function separate from `discover_all_recursive`: anchored discovery has
+    /// fail-fast behavior and stronger errors, while the all-chains variant is best-effort
+    /// and should continue exploring even when individual branches fail.
     fn discover_recursive<'a>(
         &'a self,
         entity_id: &'a EntityId,
@@ -295,6 +319,125 @@ impl FederationClient {
                 "No superior for {} could establish a path to a trusted anchor.{}",
                 entity_id, details
             )))
+        })
+    }
+
+    /// Recursively discover all structurally valid trust chains by traversing every superior branch.
+    ///
+    /// Keep this function separate from `discover_recursive`: all-chains discovery is
+    /// intentionally best-effort and continues exploring siblings when one branch fails,
+    /// while anchored discovery should return richer branch-specific errors.
+    fn discover_all_recursive<'a>(
+        &'a self,
+        entity_id: &'a EntityId,
+        visited: &'a mut HashSet<EntityId>,
+        chain: &'a mut Vec<String>,
+        discovered: &'a mut Vec<TrustChain>,
+    ) -> Pin<Box<dyn Future<Output = FederationResult<()>> + Send + 'a>> {
+        Box::pin(async move {
+            if visited.contains(entity_id) {
+                return Err(FederationError::EntityResolution(format!(
+                    "Loop detected in trust chain discovery at entity: {}",
+                    entity_id
+                )));
+            }
+            visited.insert(entity_id.clone());
+
+            let result = async {
+                let config_jwt = self.fetch_entity_configuration(entity_id).await?;
+                let config: EntityConfiguration = extract_claims_unverified(&config_jwt)?;
+                let is_leaf = chain.is_empty();
+                // Remember if this step added its own config JWT to `chain`.
+                // If yes, this step must remove it before returning.
+                // Otherwise we might pop a parent item or leak items into sibling branches.
+                let mut pushed_config = false;
+
+                if is_leaf {
+                    chain.push(config_jwt.clone());
+                    pushed_config = true;
+                }
+
+                let authority_hints = match config.authority_hints {
+                    Some(hints) if !hints.is_empty() => hints,
+                    _ => {
+                        // Terminal branch: include this node config as the chain endpoint.
+                        if !is_leaf {
+                            chain.push(config_jwt);
+                            pushed_config = true;
+                        }
+
+                        if chain.len() >= 2 {
+                            if let Ok(trust_chain) = TrustChain::try_new(chain.clone()) {
+                                discovered.push(trust_chain);
+                            }
+                        }
+
+                        // Backtrack to restore the parent frame's chain state.
+                        if pushed_config {
+                            chain.pop();
+                        }
+
+                        return Ok(());
+                    }
+                };
+
+                for superior_id in authority_hints.iter() {
+                    let superior_config_jwt = match self.fetch_entity_configuration(superior_id).await {
+                        Ok(jwt) => jwt,
+                        Err(_) => {
+                            continue;
+                        }
+                    };
+
+                    let superior_config: EntityConfiguration = match extract_claims_unverified(&superior_config_jwt) {
+                        Ok(config) => config,
+                        Err(_) => {
+                            continue;
+                        }
+                    };
+
+                    let fetch_endpoint = match superior_config
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.federation_entity.as_ref())
+                        .and_then(|f| f.federation_fetch_endpoint.clone())
+                    {
+                        Some(endpoint) => endpoint,
+                        None => continue,
+                    };
+
+                    let subordinate_jwt = match self.fetch_subordinate_statement(&fetch_endpoint, entity_id).await {
+                        Ok(jwt) => jwt,
+                        Err(_) => {
+                            continue;
+                        }
+                    };
+
+                    chain.push(subordinate_jwt);
+
+                    let branch_result = self
+                        .discover_all_recursive(superior_id, visited, chain, discovered)
+                        .await;
+
+                    // Remove the subordinate statement that was added for this child branch.
+                    chain.pop();
+
+                    if branch_result.is_err() {
+                        continue;
+                    }
+                }
+
+                // Backtrack config push done by this frame (root case).
+                if pushed_config {
+                    chain.pop();
+                }
+
+                Ok(())
+            }
+            .await;
+
+            visited.remove(entity_id);
+            result
         })
     }
 
