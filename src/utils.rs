@@ -54,11 +54,11 @@ impl Default for ReqwestHttpClient {
 #[async_trait]
 impl HttpClient for ReqwestHttpClient {
     async fn fetch_text(&self, url: Url) -> FederationResult<String> {
-        let response = self.client.get(url).send().await?;
+        let response = self.client.get(url.clone()).send().await?;
 
         if !response.status().is_success() {
             return Err(FederationError::EntityResolution(format!(
-                "Failed to fetch entity statement: HTTP {}",
+                "Failed to fetch response from {url}: HTTP {}",
                 response.status()
             )));
         }
