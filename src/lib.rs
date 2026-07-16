@@ -31,6 +31,7 @@ mod tests {
     use super::*;
     use chrono::Duration;
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use std::collections::HashSet;
     use url::Url;
 
     #[test]
@@ -1224,15 +1225,15 @@ mod tests {
         let chains = result.unwrap();
         assert_eq!(chains.len(), 2);
 
-        let mut anchors: Vec<String> = chains
+        let anchors: Vec<String> = chains
             .iter()
             .map(|chain| chain.trust_anchor_entity_id_and_configuration().unwrap().0.to_string())
             .collect();
-        anchors.sort();
+        let anchors: HashSet<String> = HashSet::from_iter(anchors);
 
         assert_eq!(
             anchors,
-            vec![trust_anchor_one_url.to_string(), trust_anchor_two_url.to_string()]
+            HashSet::from_iter([trust_anchor_one_url.to_string(), trust_anchor_two_url.to_string()])
         );
     }
 
