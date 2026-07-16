@@ -1,6 +1,6 @@
 # OpenID Federation
 
-A Rust implementation of the OpenID Federation 1.0 standard (draft 43).
+A Rust implementation of the OpenID Federation 1.0 standard.
 
 This library provides comprehensive support for OpenID Federation, enabling the creation of trust relationships between OpenID Connect providers and relying parties through a federation of trust anchors.
 
