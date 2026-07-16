@@ -54,12 +54,7 @@ impl Default for ReqwestHttpClient {
 #[async_trait]
 impl HttpClient for ReqwestHttpClient {
     async fn fetch_text(&self, url: Url) -> FederationResult<String> {
-        let response = self
-            .client
-            .get(url)
-            .header("Accept", "application/entity-statement+jwt") // TODO: this fn is very generic ("fetch_text") but then typed to only one type of response type?
-            .send()
-            .await?;
+        let response = self.client.get(url).send().await?;
 
         if !response.status().is_success() {
             return Err(FederationError::EntityResolution(format!(

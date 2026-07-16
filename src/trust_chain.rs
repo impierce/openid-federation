@@ -420,7 +420,6 @@ mod tests {
             .await;
     }
 
-    // TODO: something is def still wrong since this test doesnt add an entity config for the trust anchor, neither does it fetch it, but this absolutely mandatory by the spec, or not?
     #[tokio::test]
     async fn resolve_trust_chain_with_two_intermediates() {
         let leaf_server = MockServer::start().await;
@@ -636,8 +635,6 @@ mod tests {
             .discover_trust_chain(&leaf_url, Some(&[trust_anchor_url]))
             .await
             .unwrap_err();
-
-        println!("error === {:?}", err); // TODO:
 
         match err {
             FederationError::EntityResolution(message) => {

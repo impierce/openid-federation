@@ -237,16 +237,6 @@ impl JwtProcessor {
             }
         }
 
-        // If no kid or key not found, try all signature keys // TODO: is this desired behavior? especially an incorrect KID would probably rather just fail no?
-        let signature_keys = jwks.signature_keys();
-        for jwk in signature_keys {
-            if let Ok(decoding_key) = jwk.to_decoding_key() {
-                if let Ok(claims) = self.verify_jwt(token, &decoding_key, algorithm, artifact_type) {
-                    return Ok(claims);
-                }
-            }
-        }
-
         Err(FederationError::InvalidSubordinateStatement(
             "No suitable key found for JWT verification".to_string(),
         ))
