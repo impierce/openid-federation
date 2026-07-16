@@ -164,29 +164,6 @@ impl TrustChain {
         })
     }
 
-    /// Get the parsed validated statement at a specific index.
-    pub fn statement_at(&self, index: usize) -> FederationResult<Option<ValidatedEntityStatement>> {
-        let Some(jwt) = self.chain.get(index) else {
-            return Ok(None);
-        };
-
-        let statement: ValidatedEntityStatement = extract_claims_unverified(jwt)?;
-        Ok(Some(statement))
-    }
-
-    /// Get the subject entity ID represented at a specific index.
-    pub fn entity_id_at(&self, index: usize) -> FederationResult<Option<EntityId>> {
-        let Some(statement) = self.statement_at(index)? else {
-            return Ok(None);
-        };
-
-        let entity_id = match statement {
-            ValidatedEntityStatement::Configuration(config) => config.claims.sub,
-            ValidatedEntityStatement::SubordinateStatement(stmt) => stmt.claims.sub,
-        };
-        Ok(Some(entity_id))
-    }
-
     /// Get the leaf entity ID and leaf configuration as a tuple.
     pub fn leaf_entity_id_and_configuration(&self) -> FederationResult<(EntityId, EntityConfiguration)> {
         let Some(jwt) = self.chain.first() else {
@@ -209,54 +186,6 @@ impl TrustChain {
 
         let config: EntityConfiguration = extract_claims_unverified(jwt)?;
         Ok((config.claims.iss.clone(), config))
-    }
-
-    /// Get all intermediate subordinate statements.
-    pub fn intermediate_statements(&self) -> FederationResult<Vec<SubordinateStatement>> {
-        if self.chain.len() <= 2 {
-            return Ok(Vec::new());
-        }
-
-        let mut statements = Vec::with_capacity(self.chain.len().saturating_sub(2));
-        for jwt in self.chain.iter().skip(1).take(self.chain.len() - 2) {
-            let statement: SubordinateStatement = extract_claims_unverified(jwt)?;
-            statements.push(statement);
-        }
-        Ok(statements)
-    }
-
-    /// Get the final resolved metadata for the leaf entity.
-    ///
-    /// Reference: OpenID Federation 1.0 - Section 4.3 Metadata Resolution
-    /// https://openid.net/specs/openid-federation-1_0.html#name-metadata-resolution
-    pub fn resolve_metadata(&self) -> FederationResult<crate::EntityMetadata> {
-        // Start with the leaf entity's metadata
-        let (_, leaf_config) = self.leaf_entity_id_and_configuration()?;
-        let mut final_metadata = leaf_config.metadata.clone().unwrap_or_default();
-
-        // Apply metadata policies from each subordinate statement in the chain
-        for statement in self.intermediate_statements()? {
-            if let Some(metadata_policy) = &statement.metadata_policy {
-                // Apply metadata policy to the final metadata
-                // This is a simplified implementation - a full implementation
-                // would properly apply all policy language operators
-                self.apply_metadata_policy(&mut final_metadata, metadata_policy)?;
-            }
-        }
-
-        Ok(final_metadata)
-    }
-
-    /// Apply a metadata policy to the metadata (simplified implementation).
-    fn apply_metadata_policy(
-        &self,
-        _metadata: &mut crate::EntityMetadata,
-        _policy: &std::collections::HashMap<String, std::collections::HashMap<String, crate::PolicyOperators>>,
-    ) -> FederationResult<()> {
-        // TODO: Implement full metadata policy application logic
-        // This would involve applying each policy operator (essential, default, one_of, etc.)
-        // to the corresponding metadata fields
-        Ok(())
     }
 }
 
