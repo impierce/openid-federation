@@ -86,11 +86,23 @@ impl TrustChain {
 /// Validated entity statement (either a configuration or a subordinate statement).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum ValidatedEntityStatement {
+pub enum EntityStatement {
     /// Entity Configuration (self-signed, only at leaf or trust anchor)
     Configuration(EntityConfiguration),
     /// Subordinate Statement (signed by another entity, only between leaf and anchor)
     SubordinateStatement(SubordinateStatement),
+}
+
+impl From<EntityConfiguration> for EntityStatement {
+    fn from(config: EntityConfiguration) -> Self {
+        Self::Configuration(config)
+    }
+}
+
+impl From<SubordinateStatement> for EntityStatement {
+    fn from(statement: SubordinateStatement) -> Self {
+        Self::SubordinateStatement(statement)
+    }
 }
 
 impl TrustChain {
@@ -125,7 +137,7 @@ impl TrustChain {
             jwt_processor.verify_jwt_with_jwks(leaf_jwt, &leaf_config.jwks, JwtArtifactType::EntityStatement)?;
 
         let mut current_subject = verified_leaf.claims.sub.clone();
-        validated_statements.push(ValidatedEntityStatement::Configuration(verified_leaf));
+        validated_statements.push(EntityStatement::Configuration(verified_leaf));
 
         // Intermediate statements must all be subordinate statements and link correctly.
         for jwt_string in trust_chain.iter().skip(1).take(chain_len - 2) {
@@ -139,7 +151,7 @@ impl TrustChain {
             }
 
             current_subject = statement.claims.iss.clone();
-            validated_statements.push(ValidatedEntityStatement::SubordinateStatement(statement));
+            validated_statements.push(EntityStatement::SubordinateStatement(statement));
         }
 
         // Last element must be the trust anchor configuration and link to previous issuer.
@@ -155,7 +167,7 @@ impl TrustChain {
             ));
         }
 
-        validated_statements.push(ValidatedEntityStatement::Configuration(verified_anchor));
+        validated_statements.push(EntityStatement::Configuration(verified_anchor));
 
         Ok(Self {
             chain: trust_chain,
@@ -289,12 +301,12 @@ mod tests {
         let anchor = extract_claims_unverified::<EntityConfiguration>(&validated_trustchain.chain[4]).unwrap();
         assert_eq!(anchor.claims.sub, anchor.claims.iss);
         for statement in validated_trustchain.chain.iter() {
-            let statement = extract_claims_unverified::<ValidatedEntityStatement>(statement).unwrap();
+            let statement = extract_claims_unverified::<EntityStatement>(statement).unwrap();
             match statement {
-                ValidatedEntityStatement::Configuration(config) => {
+                EntityStatement::Configuration(config) => {
                     assert!(!config.jwks.keys.is_empty(), "Configuration must have non-empty JWKS");
                 }
-                ValidatedEntityStatement::SubordinateStatement(statement) => {
+                EntityStatement::SubordinateStatement(statement) => {
                     assert!(
                         !statement.jwks.keys.is_empty(),
                         "Subordinate statement must have non-empty JWKS"
@@ -349,12 +361,12 @@ mod tests {
         let anchor = extract_claims_unverified::<EntityConfiguration>(&validated_trustchain.chain[2]).unwrap();
         assert_eq!(anchor.claims.sub, anchor.claims.iss);
         for statement in validated_trustchain.chain.iter() {
-            let statement = extract_claims_unverified::<ValidatedEntityStatement>(statement).unwrap();
+            let statement = extract_claims_unverified::<EntityStatement>(statement).unwrap();
             match statement {
-                ValidatedEntityStatement::Configuration(config) => {
+                EntityStatement::Configuration(config) => {
                     assert!(!config.jwks.keys.is_empty(), "Configuration must have non-empty JWKS");
                 }
-                ValidatedEntityStatement::SubordinateStatement(statement) => {
+                EntityStatement::SubordinateStatement(statement) => {
                     assert!(
                         !statement.jwks.keys.is_empty(),
                         "Subordinate statement must have non-empty JWKS"
