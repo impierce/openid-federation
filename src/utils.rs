@@ -449,6 +449,23 @@ impl FederationClient {
             .collect()
     }
 
+    /// Check if an EntityID URL is a trust anchor.
+    ///
+    /// A trust anchor is identified as an entity that has no authority hints
+    /// (i.e., it is not subordinate to any other entity in the federation).
+    ///
+    /// # Arguments
+    /// * `entity_id` - The EntityID URL to check.
+    ///
+    /// # Returns
+    /// `true` if the entity is a trust anchor, `false` otherwise.
+    /// Returns an error if the entity configuration cannot be fetched or parsed.
+    pub async fn is_trust_anchor(&self, entity_id: &EntityId) -> FederationResult<bool> {
+        let config_jwt = self.fetch_entity_configuration(entity_id).await?;
+        let config: EntityConfiguration = extract_claims_unverified(&config_jwt)?;
+        Ok(config.authority_hints.as_ref().is_none_or(|hints| hints.is_empty()))
+    }
+
     /// Build the well-known OpenID Federation URL for an entity.
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.1 Entity Configuration Endpoint
@@ -522,4 +539,39 @@ impl UrlValidator {
 /// Get a timestamp that expires after the specified duration from now.
 pub fn expires_in(duration: Duration) -> i64 {
     Utc::now().timestamp() + duration.num_seconds()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::*;
+    use url::Url;
+    use wiremock::MockServer;
+
+    #[tokio::test]
+    async fn test_is_trust_anchor_true() {
+        let server = MockServer::start().await;
+        let entity_url = Url::parse(&format!("http://{}", server.address())).unwrap();
+
+        let config = build_entity_configuration(&entity_url, None, None);
+        mock_entity_configuration(&server, encode_entity_configuration(&config)).await;
+
+        let result = FederationClient::new().is_trust_anchor(&entity_url).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_is_trust_anchor_false() {
+        let server = MockServer::start().await;
+        let entity_url = Url::parse(&format!("http://{}", server.address())).unwrap();
+        let authority_url = Url::parse("https://authority.example.com").unwrap();
+
+        let config = build_entity_configuration(&entity_url, Some(vec![authority_url]), None);
+        mock_entity_configuration(&server, encode_entity_configuration(&config)).await;
+
+        let result = FederationClient::new().is_trust_anchor(&entity_url).await;
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
 }

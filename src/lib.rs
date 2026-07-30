@@ -17,6 +17,9 @@ pub mod trust_chain;
 pub mod types;
 pub mod utils;
 
+#[cfg(test)]
+pub(crate) mod test_helpers;
+
 pub use entity::*;
 pub use error::*;
 pub use jwk::{Jwk, JwkSet};
