@@ -257,10 +257,14 @@ mod tests {
         let mut metadata = EntityMetadata::new();
         metadata.federation_entity = Some(crate::FederationEntityMetadata {
             organization_name: Some("Test Federation".to_string()),
-            homepage_uri: None,
-            policy_uri: None,
-            logo_uri: None,
+            display_name: None,
+            description: None,
+            keywords: None,
             contacts: None,
+            logo_uri: None,
+            policy_uri: None,
+            information_uri: None,
+            organization_uri: None,
             federation_fetch_endpoint: Some(fetch_endpoint),
             federation_list_endpoint: None,
             federation_resolve_endpoint: None,

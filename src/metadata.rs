@@ -8,25 +8,39 @@ use url::Url;
 
 /// Federation entity metadata as defined in the OpenID Federation specification.
 ///
-/// Reference: OpenID Federation 1.0 - Section 5.1 Federation Entity Metadata
-/// https://openid.net/specs/openid-federation-1_0.html#name-federation-entity-metadata
+/// Reference: OpenID Federation 1.0 - Section 5.1.1 Federation Entity
+/// https://openid.net/specs/openid-federation-1_0.html#name-federation-entity and
+/// Section 5.2.2 Informational Metadata Parameters
+/// https://openid.net/specs/openid-federation-1_0.html#name-informational-metadata-para
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FederationEntityMetadata {
     /// Organization name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub organization_name: Option<String>,
-    /// Homepage URI
+    /// Display name
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub homepage_uri: Option<Url>,
-    /// Policy URI
+    pub display_name: Option<String>,
+    /// Description
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub policy_uri: Option<Url>,
-    /// Logo URI
+    pub description: Option<String>,
+    /// Keywords
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub logo_uri: Option<Url>,
+    pub keywords: Option<Vec<String>>,
     /// Administrative contacts
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contacts: Option<Vec<String>>,
+    /// Logo URI
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logo_uri: Option<Url>,
+    /// Policy URI
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_uri: Option<Url>,
+    /// Information URI
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub information_uri: Option<Url>,
+    /// Organization URI
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_uri: Option<Url>,
     /// Federation fetch endpoint
     #[serde(skip_serializing_if = "Option::is_none")]
     pub federation_fetch_endpoint: Option<Url>,

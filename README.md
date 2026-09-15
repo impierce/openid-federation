@@ -45,7 +45,7 @@ let mut config = EntityConfiguration::new(entity_id, jwks, exp, iat);
 let mut metadata = EntityMetadata::new();
 metadata.federation_entity = Some(FederationEntityMetadata {
     organization_name: Some("Example Organization".to_string()),
-    homepage_uri: Some(Url::parse("https://example.com")?),
+    organization_uri: Some(Url::parse("https://example.com")?),
     ..Default::default()
 });
 
@@ -54,7 +54,7 @@ config = config.with_metadata(metadata);
 // Create and validate trust chains
 let trust_chain = TrustChain::try_new(vec![
     "entity_config_jwt".to_string(),
-    "intermediate_statement_jwt".to_string(), 
+    "intermediate_statement_jwt".to_string(),
     "trust_anchor_config_jwt".to_string(),
 ]);
 
@@ -70,14 +70,14 @@ use url::Url;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = FederationClient::new();
     let entity_id = Url::parse("https://example.com")?;
-    
+
     // Validate entity ID
     UrlValidator::validate_entity_id(&entity_id)?;
-    
+
     // Fetch entity configuration
     let config_jwt = client.fetch_entity_configuration(&entity_id).await?;
     println!("Fetched entity configuration: {}", config_jwt);
-    
+
     Ok(())
 }
 ```
@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 This implementation follows the OpenID Federation 1.0 specification (draft 43) and includes:
 
 - Subordinate Statement format and validation
-- Entity Configuration format and validation  
+- Entity Configuration format and validation
 - Trust Chain construction and validation
 - Federation metadata policy operators
 - Well-known endpoint discovery
