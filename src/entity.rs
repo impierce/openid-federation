@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::{
-    Constraints, EntityId, EntityMetadata, FederationError, FederationResult, JwkSet, JwtClaims, PolicyOperators,
-    TrustMark, TrustMarkIssuers, TrustMarkOwners,
+    extract_claims_unverified, Constraints, EntityId, EntityMetadata, FederationError, FederationResult, JwkSet,
+    JwtArtifactType, JwtClaims, JwtProcessor, PolicyOperators, TrustMark, TrustMarkIssuers, TrustMarkOwners,
 };
 
 /// Subordinate Statement as defined in the OpenID Federation specification.
@@ -105,6 +105,51 @@ impl SubordinateStatement {
         self
     }
 
+    /// Decode and authenticate a Subordinate Statement JWT.
+    ///
+    /// This is the only way to turn an untrusted JWT string into a `SubordinateStatement` that is
+    /// known to have been issued by `issuer` about `subject`. It checks, in order:
+    /// 1. the structural requirements of [`SubordinateStatement::validate`],
+    /// 2. that the claimed `iss` and `sub` are exactly the expected entities,
+    /// 3. that the JWT carries the `entity-statement+jwt` type and is signed with one of
+    ///    `issuer_keys`, which MUST be keys already authenticated for `issuer` (for example the
+    ///    `jwks` of the Subordinate Statement about `issuer`, or the Trust Anchor's keys).
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 10.2 Validating a Trust Chain
+    /// https://openid.net/specs/openid-federation-1_0.html#name-validating-a-trust-chain
+    pub fn from_verified_jwt(
+        jwt: &str,
+        issuer: &EntityId,
+        subject: &EntityId,
+        issuer_keys: &JwkSet,
+    ) -> FederationResult<Self> {
+        let unverified: Self = extract_claims_unverified(jwt)?;
+        unverified.validate()?;
+
+        if unverified.claims.iss != *issuer {
+            return Err(FederationError::InvalidSubordinateStatement(format!(
+                "Subordinate statement issuer mismatch: expected {}, got {}",
+                issuer, unverified.claims.iss
+            )));
+        }
+
+        if unverified.claims.sub != *subject {
+            return Err(FederationError::InvalidSubordinateStatement(format!(
+                "Subordinate statement subject mismatch: expected {}, got {}",
+                subject, unverified.claims.sub
+            )));
+        }
+
+        JwtProcessor::new()
+            .verify_jwt_with_jwks(jwt, issuer_keys, JwtArtifactType::EntityStatement)
+            .map_err(|err| {
+                FederationError::InvalidSubordinateStatement(format!(
+                    "Subordinate statement issued by {} about {} is not signed with an authenticated key of the issuer: {}",
+                    issuer, subject, err
+                ))
+            })
+    }
+
     // TODO: validate JWT here as well, not only contents. This should check the exp and nbf claims already.
     /// Validate the subordinate statement structure, this does not validate the JWT and its signature.
     ///
@@ -197,6 +242,45 @@ impl EntityConfiguration {
     pub fn with_trust_mark_owners(mut self, trust_mark_owners: TrustMarkOwners) -> Self {
         self.trust_mark_owners = Some(trust_mark_owners);
         self
+    }
+
+    /// Decode and authenticate a self-signed Entity Configuration JWT published by `entity_id`.
+    ///
+    /// This is the only way to turn an untrusted JWT string (typically fetched from the entity's
+    /// `.well-known/openid-federation` endpoint) into an `EntityConfiguration` that is known to be
+    /// the configuration *of that entity*. It checks, in order:
+    /// 1. the structural requirements of [`EntityConfiguration::validate`],
+    /// 2. that both `iss` and `sub` are exactly `entity_id`, so a document served by one entity
+    ///    cannot claim another entity's identity,
+    /// 3. that the JWT carries the `entity-statement+jwt` type and is signed with a key from its
+    ///    own `jwks` (self-signed).
+    ///
+    /// Note that a valid self-signature only proves that the publisher controls the keys it
+    /// advertises. Whether those keys are endorsed by a federation is established by
+    /// [`crate::TrustChain::try_new`], which checks them against the Subordinate Statement issued
+    /// by the entity's superior.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 9 Obtaining Federation Entity Configuration Information
+    /// https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity-
+    pub fn from_verified_jwt(jwt: &str, entity_id: &EntityId) -> FederationResult<Self> {
+        let unverified: Self = extract_claims_unverified(jwt)?;
+        unverified.validate()?;
+
+        if unverified.claims.iss != *entity_id || unverified.claims.sub != *entity_id {
+            return Err(FederationError::InvalidSubordinateStatement(format!(
+                "Entity configuration identity mismatch: expected {}, got iss={} sub={}",
+                entity_id, unverified.claims.iss, unverified.claims.sub
+            )));
+        }
+
+        JwtProcessor::new()
+            .verify_jwt_with_jwks(jwt, &unverified.jwks, JwtArtifactType::EntityStatement)
+            .map_err(|err| {
+                FederationError::InvalidSubordinateStatement(format!(
+                    "Entity configuration of {} is not signed with a key from its own jwks: {}",
+                    entity_id, err
+                ))
+            })
     }
 
     // TODO: validate JWT here as well, not only contents. This should check the exp and nbf claims already.

@@ -1,6 +1,6 @@
 //! Utility functions for OpenID Federation operations.
 
-use crate::{extract_claims_unverified, EntityConfiguration, EntityId, FederationError, FederationResult, TrustChain};
+use crate::{EntityConfiguration, EntityId, FederationError, FederationResult, SubordinateStatement, TrustChain};
 use chrono::{Duration, Utc};
 use reqwest::Client;
 use std::collections::HashSet;
@@ -108,6 +108,46 @@ impl FederationClient {
         self.http_client.fetch_text(well_known_url).await
     }
 
+    /// Fetch and authenticate the entity configuration of `entity_id`.
+    ///
+    /// Unlike [`FederationClient::fetch_entity_configuration`], which returns the raw response body,
+    /// this verifies that the fetched document really is `entity_id`'s configuration: it must be
+    /// structurally valid, have `iss` and `sub` equal to `entity_id`, and be self-signed with a key
+    /// from its own `jwks` (see [`EntityConfiguration::from_verified_jwt`]). Discovery relies on
+    /// this binding before following `authority_hints` or federation endpoints.
+    ///
+    /// # Returns
+    /// The raw JWT together with the verified configuration.
+    pub async fn resolve_entity_configuration(
+        &self,
+        entity_id: &EntityId,
+    ) -> FederationResult<(String, EntityConfiguration)> {
+        let jwt = self.fetch_entity_configuration(entity_id).await?;
+        let config = EntityConfiguration::from_verified_jwt(&jwt, entity_id)?;
+        Ok((jwt, config))
+    }
+
+    /// Fetch and authenticate the subordinate statement that `superior` issues about `subject`.
+    ///
+    /// The statement is fetched from the superior's `federation_fetch_endpoint` and verified with
+    /// [`SubordinateStatement::from_verified_jwt`] against `superior_keys`, which must be keys
+    /// already authenticated for the superior. During discovery those are the keys from the
+    /// superior's verified entity configuration; [`TrustChain::try_new`] later re-verifies the
+    /// whole chain with keys endorsed from the trust anchor downwards.
+    async fn resolve_subordinate_statement(
+        &self,
+        superior: &EntityId,
+        superior_keys: &crate::JwkSet,
+        federation_fetch_endpoint: &Url,
+        subject: &EntityId,
+    ) -> FederationResult<(String, SubordinateStatement)> {
+        let jwt = self
+            .fetch_subordinate_statement(federation_fetch_endpoint, subject)
+            .await?;
+        let statement = SubordinateStatement::from_verified_jwt(&jwt, superior, subject, superior_keys)?;
+        Ok((jwt, statement))
+    }
+
     /// Fetch an subordinate statement from a federation fetch endpoint.
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
@@ -156,8 +196,7 @@ impl FederationClient {
         let mut visited = HashSet::new();
         let mut chain = Vec::new();
 
-        let start_entity_config_jwt = self.fetch_entity_configuration(start_entity_id).await?;
-        let start_entity_configuration: EntityConfiguration = extract_claims_unverified(&start_entity_config_jwt)?;
+        let (_, start_entity_configuration) = self.resolve_entity_configuration(start_entity_id).await?;
 
         let trusted_anchors: Vec<EntityId> = if let Some(trusted_anchors) = trusted_anchors {
             trusted_anchors.to_vec()
@@ -191,7 +230,12 @@ impl FederationClient {
         TrustChain::try_new(chain)
     }
 
-    /// Discover every structurally valid trust chain reachable from a starting entity.
+    /// Discover every authenticated trust chain reachable from a starting entity.
+    ///
+    /// Every returned chain passed [`TrustChain::try_new`], and every entity configuration on it
+    /// was fetched from, and is bound to, the entity identifier it claims. This method does not
+    /// decide which trust anchors are trustworthy; callers must compare each chain's anchor
+    /// (see [`TrustChain::trust_anchor_entity_id_and_configuration`]) against their own trust list.
     ///
     /// Unlike [`FederationClient::discover_trust_chain`], this method does not take a trusted-anchor
     /// list and does not read trusted anchors from the starting entity configuration. It walks every
@@ -232,8 +276,9 @@ impl FederationClient {
             }
             visited.insert(entity_id.clone());
 
-            let config_jwt = self.fetch_entity_configuration(entity_id).await?;
-            let config: EntityConfiguration = extract_claims_unverified(&config_jwt)?;
+            // Binds the fetched document to `entity_id`, so that a trusted anchor's entry in the
+            // chain is really the configuration served by (and self-signed by) that anchor.
+            let (config_jwt, config) = self.resolve_entity_configuration(entity_id).await?;
             let is_root = chain.is_empty();
             let is_trusted_anchor = trusted_anchors.contains(entity_id);
             if is_root || is_trusted_anchor {
@@ -257,18 +302,16 @@ impl FederationClient {
 
             let mut last_error: Option<String> = None;
             for superior_id in authority_hints.iter() {
-                let superior_config_jwt = match self.fetch_entity_configuration(superior_id).await {
-                    Ok(jwt) => jwt,
+                let (_, superior_config) = match self.resolve_entity_configuration(superior_id).await {
+                    Ok(resolved) => resolved,
                     Err(err) => {
                         last_error = Some(format!(
-                            "Failed to fetch superior {} configuration: {}",
+                            "Failed to resolve superior {} configuration: {}",
                             superior_id, err
                         ));
                         continue;
                     }
                 };
-
-                let superior_config: EntityConfiguration = extract_claims_unverified(&superior_config_jwt)?;
 
                 let fetch_endpoint = superior_config
                     .metadata
@@ -282,11 +325,14 @@ impl FederationClient {
                         ))
                     })?;
 
-                let subordinate_jwt = match self.fetch_subordinate_statement(&fetch_endpoint, entity_id).await {
-                    Ok(jwt) => jwt,
+                let (subordinate_jwt, _) = match self
+                    .resolve_subordinate_statement(superior_id, &superior_config.jwks, &fetch_endpoint, entity_id)
+                    .await
+                {
+                    Ok(resolved) => resolved,
                     Err(err) => {
                         last_error = Some(format!(
-                            "Failed to fetch subordinate statement from {} for {} via {}: {}",
+                            "Failed to resolve subordinate statement from {} for {} via {}: {}",
                             superior_id, entity_id, fetch_endpoint, err
                         ));
                         continue;
@@ -339,8 +385,9 @@ impl FederationClient {
             visited.insert(entity_id.clone());
 
             let result = async {
-                let config_jwt = self.fetch_entity_configuration(entity_id).await?;
-                let config: EntityConfiguration = extract_claims_unverified(&config_jwt)?;
+                // Binds the fetched document to `entity_id`; a terminal configuration that claims
+                // another entity's identity is rejected here instead of becoming a chain's anchor.
+                let (config_jwt, config) = self.resolve_entity_configuration(entity_id).await?;
                 let is_leaf = chain.is_empty();
                 // Remember if this step added its own config JWT to `chain`.
                 // If yes, this step must remove it before returning.
@@ -377,15 +424,8 @@ impl FederationClient {
                 };
 
                 for superior_id in authority_hints.iter() {
-                    let superior_config_jwt = match self.fetch_entity_configuration(superior_id).await {
-                        Ok(jwt) => jwt,
-                        Err(_) => {
-                            continue;
-                        }
-                    };
-
-                    let superior_config: EntityConfiguration = match extract_claims_unverified(&superior_config_jwt) {
-                        Ok(config) => config,
+                    let (_, superior_config) = match self.resolve_entity_configuration(superior_id).await {
+                        Ok(resolved) => resolved,
                         Err(_) => {
                             continue;
                         }
@@ -401,8 +441,11 @@ impl FederationClient {
                         None => continue,
                     };
 
-                    let subordinate_jwt = match self.fetch_subordinate_statement(&fetch_endpoint, entity_id).await {
-                        Ok(jwt) => jwt,
+                    let (subordinate_jwt, _) = match self
+                        .resolve_subordinate_statement(superior_id, &superior_config.jwks, &fetch_endpoint, entity_id)
+                        .await
+                    {
+                        Ok(resolved) => resolved,
                         Err(_) => {
                             continue;
                         }
