@@ -1134,4 +1134,192 @@ mod tests {
         );
         assert_eq!(chains[0].leaf_entity_id_and_configuration().unwrap().0, leaf_url);
     }
+
+    /// Serves `anchor_url`'s configuration from `server`, signed with `secret`, and its statement
+    /// about `leaf_url` endorsing `leaf_keys`.
+    async fn mock_anchor_endorsing(
+        server: &MockServer,
+        anchor_url: &Url,
+        secret: &str,
+        leaf_url: &Url,
+        leaf_keys: JwkSet,
+    ) {
+        let anchor_config = keyed_configuration(
+            anchor_url,
+            keyed_jwk_set(secret, "anchor-key"),
+            None,
+            Some(build_fetch_endpoint(anchor_url)),
+        );
+        mock_entity_configuration(server, sign_with(&anchor_config, secret, "anchor-key")).await;
+        mock_subordinate_statement(
+            server,
+            leaf_url,
+            sign_with(&keyed_statement(anchor_url, leaf_url, leaf_keys), secret, "anchor-key"),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn all_chains_discovery_reports_every_skipped_branch() {
+        let leaf_server = MockServer::start().await;
+        let good_anchor_server = MockServer::start().await;
+        let unreachable_server = MockServer::start().await;
+        let no_fetch_endpoint_server = MockServer::start().await;
+        let no_statement_server = MockServer::start().await;
+        let unendorsed_server = MockServer::start().await;
+
+        let url_of = |server: &MockServer| Url::parse(&format!("http://{}", server.address())).unwrap();
+        let leaf_url = url_of(&leaf_server);
+        let good_anchor_url = url_of(&good_anchor_server);
+        let unreachable_url = url_of(&unreachable_server);
+        let no_fetch_endpoint_url = url_of(&no_fetch_endpoint_server);
+        let no_statement_url = url_of(&no_statement_server);
+        let unendorsed_url = url_of(&unendorsed_server);
+
+        let leaf_keys = || keyed_jwk_set(LEAF_SECRET, "leaf-key");
+        let leaf_config = keyed_configuration(
+            &leaf_url,
+            leaf_keys(),
+            Some(vec![
+                unreachable_url.clone(),
+                no_fetch_endpoint_url.clone(),
+                no_statement_url.clone(),
+                unendorsed_url.clone(),
+                good_anchor_url.clone(),
+            ]),
+            None,
+        );
+        mock_entity_configuration(&leaf_server, sign_with(&leaf_config, LEAF_SECRET, "leaf-key")).await;
+
+        mock_anchor_endorsing(
+            &good_anchor_server,
+            &good_anchor_url,
+            ANCHOR_SECRET,
+            &leaf_url,
+            leaf_keys(),
+        )
+        .await;
+
+        // `unreachable_server` serves nothing.
+
+        let no_fetch_endpoint_config = keyed_configuration(
+            &no_fetch_endpoint_url,
+            keyed_jwk_set(ANCHOR_SECRET, "anchor-key"),
+            None,
+            None,
+        );
+        mock_entity_configuration(
+            &no_fetch_endpoint_server,
+            sign_with(&no_fetch_endpoint_config, ANCHOR_SECRET, "anchor-key"),
+        )
+        .await;
+
+        // Has a fetch endpoint, but no statement about the leaf.
+        let no_statement_config = keyed_configuration(
+            &no_statement_url,
+            keyed_jwk_set(ANCHOR_SECRET, "anchor-key"),
+            None,
+            Some(build_fetch_endpoint(&no_statement_url)),
+        );
+        mock_entity_configuration(
+            &no_statement_server,
+            sign_with(&no_statement_config, ANCHOR_SECRET, "anchor-key"),
+        )
+        .await;
+
+        // Correctly signed statement, but it endorses a key the leaf does not sign with.
+        mock_anchor_endorsing(
+            &unendorsed_server,
+            &unendorsed_url,
+            INTERMEDIATE_SECRET,
+            &leaf_url,
+            keyed_jwk_set(ATTACKER_SECRET, "leaf-key"),
+        )
+        .await;
+
+        let client = FederationClient::new();
+
+        let discovery = client
+            .discover_all_trust_chains_with_failures(&leaf_url)
+            .await
+            .expect("the leaf itself is resolvable");
+
+        assert_eq!(discovery.chains.len(), 1);
+        assert_eq!(
+            discovery.chains[0]
+                .trust_anchor_entity_id_and_configuration()
+                .unwrap()
+                .0,
+            good_anchor_url
+        );
+
+        let failure_for = |entity_id: &Url| {
+            let failures: Vec<_> = discovery
+                .failures
+                .iter()
+                .filter(|failure| &failure.entity_id == entity_id)
+                .collect();
+            assert_eq!(
+                failures.len(),
+                1,
+                "expected one failure for {entity_id}: {:?}",
+                discovery.failures
+            );
+            failures[0].error.to_string()
+        };
+        assert_eq!(discovery.failures.len(), 4, "failures: {:?}", discovery.failures);
+        assert!(failure_for(&unreachable_url).contains("HTTP 404"));
+        assert!(failure_for(&no_fetch_endpoint_url).contains("has no federation_fetch_endpoint"));
+        assert!(failure_for(&no_statement_url).contains("federation_fetch_endpoint?sub="));
+        assert!(failure_for(&unendorsed_url).contains("not signed with a key endorsed by its superior"));
+
+        let chains = client
+            .discover_all_trust_chains(&leaf_url)
+            .await
+            .expect("all-chains discovery still returns the valid branch");
+        assert_eq!(chains.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn all_chains_discovery_reports_failures_when_no_chain_is_found() {
+        let leaf_server = MockServer::start().await;
+        let unreachable_server = MockServer::start().await;
+
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let unreachable_url = Url::parse(&format!("http://{}", unreachable_server.address())).unwrap();
+
+        let leaf_config = keyed_configuration(
+            &leaf_url,
+            keyed_jwk_set(LEAF_SECRET, "leaf-key"),
+            Some(vec![unreachable_url.clone()]),
+            None,
+        );
+        mock_entity_configuration(&leaf_server, sign_with(&leaf_config, LEAF_SECRET, "leaf-key")).await;
+
+        let client = FederationClient::new();
+
+        let discovery = client
+            .discover_all_trust_chains_with_failures(&leaf_url)
+            .await
+            .expect("the leaf itself is resolvable");
+        assert!(discovery.chains.is_empty());
+        assert_eq!(discovery.failures.len(), 1, "failures: {:?}", discovery.failures);
+        assert_eq!(discovery.failures[0].entity_id, unreachable_url);
+
+        client
+            .discover_all_trust_chains(&leaf_url)
+            .await
+            .expect_err("all-chains discovery keeps failing without chains");
+    }
+
+    #[tokio::test]
+    async fn all_chains_discovery_with_failures_fails_for_unresolvable_start_entity() {
+        let unreachable_server = MockServer::start().await;
+        let unreachable_url = Url::parse(&format!("http://{}", unreachable_server.address())).unwrap();
+
+        FederationClient::new()
+            .discover_all_trust_chains_with_failures(&unreachable_url)
+            .await
+            .expect_err("the start entity must be resolvable");
+    }
 }

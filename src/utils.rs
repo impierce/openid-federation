@@ -67,6 +67,27 @@ impl HttpClient for ReqwestHttpClient {
     }
 }
 
+/// Result of best-effort trust chain discovery, see
+/// [`FederationClient::discover_all_trust_chains_with_failures`].
+#[derive(Debug, Default)]
+pub struct TrustChainDiscovery {
+    /// Every authenticated trust chain that was found.
+    pub chains: Vec<TrustChain>,
+    /// Every branch that was skipped because it could not be resolved or authenticated.
+    pub failures: Vec<TrustChainDiscoveryFailure>,
+}
+
+/// A branch skipped during best-effort trust chain discovery.
+#[derive(Debug)]
+pub struct TrustChainDiscoveryFailure {
+    /// The entity that was being resolved when the branch failed: a superior whose configuration
+    /// or subordinate statement could not be resolved, or the trust anchor of a chain that failed
+    /// validation.
+    pub entity_id: EntityId,
+    /// Why the branch was skipped.
+    pub error: FederationError,
+}
+
 /// HTTP client for federation operations.
 ///
 /// This client can be instantiated with any implementation of [`HttpClient`],
@@ -240,19 +261,44 @@ impl FederationClient {
     /// Unlike [`FederationClient::discover_trust_chain`], this method does not take a trusted-anchor
     /// list and does not read trusted anchors from the starting entity configuration. It walks every
     /// authority-hint branch it can resolve and returns all valid chains it finds.
+    ///
+    /// Branches that cannot be resolved or authenticated are skipped silently. Use
+    /// [`FederationClient::discover_all_trust_chains_with_failures`] to learn which ones.
     pub async fn discover_all_trust_chains(&self, start_entity_id: &EntityId) -> FederationResult<Vec<TrustChain>> {
-        let mut discovered = Vec::new();
-        let mut visited = HashSet::new();
-        let mut chain = Vec::new();
+        let discovery = self.discover_all_trust_chains_with_failures(start_entity_id).await?;
 
-        self.discover_all_recursive(start_entity_id, &mut visited, &mut chain, &mut discovered)
-            .await?;
-
-        if discovered.is_empty() {
+        if discovery.chains.is_empty() {
             return Err(FederationError::EntityResolution("No trust chains found".to_string()));
         }
 
-        Ok(discovered)
+        Ok(discovery.chains)
+    }
+
+    /// Discover every authenticated trust chain reachable from a starting entity, and report every
+    /// branch that had to be skipped.
+    ///
+    /// Walks the same branches and returns the same chains as
+    /// [`FederationClient::discover_all_trust_chains`]. In addition, every skipped branch is
+    /// recorded as a [`TrustChainDiscoveryFailure`]: a superior whose configuration, federation
+    /// fetch endpoint or subordinate statement could not be resolved, a loop, or a found chain that
+    /// failed [`TrustChain::try_new`]. This lets callers tell an entity without trust chains from
+    /// one whose superiors could not be reached.
+    ///
+    /// # Returns
+    /// The discovered chains and failures, which may both be empty. Fails only if the starting
+    /// entity's own configuration cannot be resolved.
+    pub async fn discover_all_trust_chains_with_failures(
+        &self,
+        start_entity_id: &EntityId,
+    ) -> FederationResult<TrustChainDiscovery> {
+        let mut discovery = TrustChainDiscovery::default();
+        let mut visited = HashSet::new();
+        let mut chain = Vec::new();
+
+        self.discover_all_recursive(start_entity_id, &mut visited, &mut chain, &mut discovery)
+            .await?;
+
+        Ok(discovery)
     }
 
     /// Recursively discover one anchored trust chain by traversing superiors.
@@ -363,17 +409,20 @@ impl FederationClient {
         })
     }
 
-    /// Recursively discover all structurally valid trust chains by traversing every superior branch.
+    /// Recursively discover all authenticated trust chains by traversing every superior branch.
     ///
     /// Keep this function separate from `discover_recursive`: all-chains discovery is
     /// intentionally best-effort and continues exploring siblings when one branch fails,
-    /// while anchored discovery should return richer branch-specific errors.
+    /// recording the failure in `discovery`, while anchored discovery fails fast.
+    ///
+    /// Returns an error only if `entity_id` itself cannot be resolved or closes a loop; the
+    /// caller records that as a failure of its branch.
     fn discover_all_recursive<'a>(
         &'a self,
         entity_id: &'a EntityId,
         visited: &'a mut HashSet<EntityId>,
         chain: &'a mut Vec<String>,
-        discovered: &'a mut Vec<TrustChain>,
+        discovery: &'a mut TrustChainDiscovery,
     ) -> Pin<Box<dyn Future<Output = FederationResult<()>> + Send + 'a>> {
         Box::pin(async move {
             if visited.contains(entity_id) {
@@ -409,8 +458,12 @@ impl FederationClient {
                         }
 
                         if chain.len() >= 2 {
-                            if let Ok(trust_chain) = TrustChain::try_new(chain.clone()) {
-                                discovered.push(trust_chain);
+                            match TrustChain::try_new(chain.clone()) {
+                                Ok(trust_chain) => discovery.chains.push(trust_chain),
+                                Err(error) => discovery.failures.push(TrustChainDiscoveryFailure {
+                                    entity_id: entity_id.clone(),
+                                    error,
+                                }),
                             }
                         }
 
@@ -424,9 +477,15 @@ impl FederationClient {
                 };
 
                 for superior_id in authority_hints.iter() {
+                    let skip = |error| TrustChainDiscoveryFailure {
+                        entity_id: superior_id.clone(),
+                        error,
+                    };
+
                     let (_, superior_config) = match self.resolve_entity_configuration(superior_id).await {
                         Ok(resolved) => resolved,
-                        Err(_) => {
+                        Err(err) => {
+                            discovery.failures.push(skip(err));
                             continue;
                         }
                     };
@@ -438,7 +497,13 @@ impl FederationClient {
                         .and_then(|f| f.federation_fetch_endpoint.clone())
                     {
                         Some(endpoint) => endpoint,
-                        None => continue,
+                        None => {
+                            discovery.failures.push(skip(FederationError::EntityResolution(format!(
+                                "Superior {} has no federation_fetch_endpoint",
+                                superior_id
+                            ))));
+                            continue;
+                        }
                     };
 
                     let (subordinate_jwt, _) = match self
@@ -446,7 +511,8 @@ impl FederationClient {
                         .await
                     {
                         Ok(resolved) => resolved,
-                        Err(_) => {
+                        Err(err) => {
+                            discovery.failures.push(skip(err));
                             continue;
                         }
                     };
@@ -454,14 +520,14 @@ impl FederationClient {
                     chain.push(subordinate_jwt);
 
                     let branch_result = self
-                        .discover_all_recursive(superior_id, visited, chain, discovered)
+                        .discover_all_recursive(superior_id, visited, chain, discovery)
                         .await;
 
                     // Remove the subordinate statement that was added for this child branch.
                     chain.pop();
 
-                    if branch_result.is_err() {
-                        continue;
+                    if let Err(err) = branch_result {
+                        discovery.failures.push(skip(err));
                     }
                 }
 
