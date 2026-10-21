@@ -115,8 +115,26 @@ impl TrustChain {
 
     /// Validate and construct a validated trust chain from raw JWT statements.
     ///
-    /// Reference: OpenID Federation 1.0 - Section 4.2 Trust Chain Validation
-    /// https://openid.net/specs/openid-federation-1_0.html#name-trust-chain-validation
+    /// The chain is authenticated from the Trust Anchor down to the leaf, so that every signature
+    /// is verified with keys that were themselves endorsed by the statement above:
+    ///
+    /// 1. The last statement must be the Trust Anchor's Entity Configuration, self-signed with a key
+    ///    from its own `jwks`. Those keys are the root of trust for the rest of the chain. Whether
+    ///    this Trust Anchor is one the caller trusts is a separate decision; discovery binds the
+    ///    configuration to the entity identifier it was fetched from, and callers of this
+    ///    constructor must compare the anchor's entity identifier against their own trust list.
+    /// 2. Each Subordinate Statement, walking downwards, must be issued by the entity whose keys
+    ///    were just authenticated (`iss` equals the previous `sub`) and must be signed with one of
+    ///    those keys. Its `jwks` then becomes the set of authenticated keys for its `sub`.
+    /// 3. The first statement must be the leaf's Entity Configuration about the entity endorsed by
+    ///    the lowest Subordinate Statement, signed with a key endorsed there, and self-signed with
+    ///    a key from its own `jwks`.
+    ///
+    /// Structural checks (`exp`, `nbf`, non-empty `jwks`, JWT `typ` header, `iss`/`sub` rules) are
+    /// applied to every statement as well.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 10.2 Validating a Trust Chain
+    /// https://openid.net/specs/openid-federation-1_0.html#name-validating-a-trust-chain
     pub fn try_new(trust_chain: Vec<String>) -> FederationResult<Self> {
         let chain_len = trust_chain.len();
 
@@ -126,48 +144,68 @@ impl TrustChain {
             ));
         }
 
-        let jwt_processor = JwtProcessor::new();
-        let mut validated_statements = Vec::with_capacity(chain_len);
+        // Step 1: the Trust Anchor's Entity Configuration is the root of trust for this chain.
+        let anchor_jwt = &trust_chain[chain_len - 1];
+        let anchor_unverified: EntityConfiguration = extract_claims_unverified(anchor_jwt)?;
+        let anchor =
+            EntityConfiguration::from_verified_jwt(anchor_jwt, &anchor_unverified.claims.sub).map_err(|err| {
+                FederationError::TrustChainValidation(format!("Invalid trust anchor entity configuration: {}", err))
+            })?;
 
-        // First element must be a self-signed leaf entity configuration.
-        let leaf_jwt = &trust_chain[0];
-        let leaf_config: EntityConfiguration = extract_claims_unverified(leaf_jwt)?;
-        leaf_config.validate()?;
-        let verified_leaf: EntityConfiguration =
-            jwt_processor.verify_jwt_with_jwks(leaf_jwt, &leaf_config.jwks, JwtArtifactType::EntityStatement)?;
+        // The entity whose keys are currently authenticated, and those keys.
+        let mut endorsed_entity = anchor.claims.sub.clone();
+        let mut endorsed_keys = anchor.jwks.clone();
 
-        let mut current_subject = verified_leaf.claims.sub.clone();
-        validated_statements.push(EntityStatement::Configuration(verified_leaf));
+        // Step 2: walk the Subordinate Statements from the anchor towards the leaf. Each one must be
+        // issued by `endorsed_entity` and signed with `endorsed_keys`; it then endorses its subject.
+        for jwt_string in trust_chain[1..chain_len - 1].iter().rev() {
+            let unverified: SubordinateStatement = extract_claims_unverified(jwt_string)?;
 
-        // Intermediate statements must all be subordinate statements and link correctly.
-        for jwt_string in trust_chain.iter().skip(1).take(chain_len - 2) {
-            let statement: SubordinateStatement = extract_claims_unverified(jwt_string)?;
-            statement.validate()?;
-
-            if statement.claims.sub != current_subject {
-                return Err(FederationError::TrustChainValidation(
-                    "Trust chain subject mismatch".to_string(),
-                ));
+            if unverified.claims.iss != endorsed_entity {
+                return Err(FederationError::TrustChainValidation(format!(
+                    "Trust chain is not properly linked: expected a subordinate statement issued by {}, got one issued by {}",
+                    endorsed_entity, unverified.claims.iss
+                )));
             }
 
-            current_subject = statement.claims.iss.clone();
-            validated_statements.push(EntityStatement::SubordinateStatement(statement));
+            let statement = SubordinateStatement::from_verified_jwt(
+                jwt_string,
+                &endorsed_entity,
+                &unverified.claims.sub,
+                &endorsed_keys,
+            )
+            .map_err(|err| FederationError::TrustChainValidation(format!("Invalid subordinate statement: {}", err)))?;
+
+            endorsed_entity = statement.claims.sub;
+            endorsed_keys = statement.jwks;
         }
 
-        // Last element must be the trust anchor configuration and link to previous issuer.
-        let anchor_jwt = &trust_chain[chain_len - 1];
-        let anchor_config: EntityConfiguration = extract_claims_unverified(anchor_jwt)?;
-        anchor_config.validate()?;
-        let verified_anchor: EntityConfiguration =
-            jwt_processor.verify_jwt_with_jwks(anchor_jwt, &anchor_config.jwks, JwtArtifactType::EntityStatement)?;
+        // Step 3: the leaf's Entity Configuration must be about the entity endorsed by the lowest
+        // Subordinate Statement and signed with a key that statement endorses.
+        let leaf_jwt = &trust_chain[0];
+        let leaf_unverified: EntityConfiguration = extract_claims_unverified(leaf_jwt)?;
 
-        if verified_anchor.claims.sub != current_subject {
-            return Err(FederationError::TrustChainValidation(
-                "Trust chain is not properly linked".to_string(),
-            ));
+        if leaf_unverified.claims.sub != endorsed_entity {
+            return Err(FederationError::TrustChainValidation(format!(
+                "Trust chain subject mismatch: leaf entity configuration is about {}, but the chain endorses {}",
+                leaf_unverified.claims.sub, endorsed_entity
+            )));
         }
 
-        validated_statements.push(EntityStatement::Configuration(verified_anchor));
+        // Self-signed with its own keys, and identity-consistent.
+        EntityConfiguration::from_verified_jwt(leaf_jwt, &endorsed_entity).map_err(|err| {
+            FederationError::TrustChainValidation(format!("Invalid leaf entity configuration: {}", err))
+        })?;
+
+        // Signed with a key endorsed by its superior, so key substitution by the leaf is rejected.
+        JwtProcessor::new()
+            .verify_jwt_with_jwks::<EntityConfiguration>(leaf_jwt, &endorsed_keys, JwtArtifactType::EntityStatement)
+            .map_err(|err| {
+                FederationError::TrustChainValidation(format!(
+                    "Leaf entity configuration of {} is not signed with a key endorsed by its superior: {}",
+                    endorsed_entity, err
+                ))
+            })?;
 
         Ok(Self {
             chain: trust_chain,
@@ -587,5 +625,513 @@ mod tests {
             }
             other => panic!("expected EntityResolution error, got: {:?}", other),
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Regression tests for signature and identity binding. Every entity below uses its own key so
+    // that a chain only validates when each statement is signed with keys endorsed from the anchor.
+    // ---------------------------------------------------------------------------------------------
+
+    const LEAF_SECRET: &str = "leaf-secret-key-0123456789-0123456789-0123456789";
+    const INTERMEDIATE_SECRET: &str = "intermediate-secret-key-0123456789-0123456789";
+    const ANCHOR_SECRET: &str = "anchor-secret-key-0123456789-0123456789-01234";
+    const ATTACKER_SECRET: &str = "attacker-secret-key-0123456789-0123456789-012";
+
+    fn keyed_jwk_set(secret: &str, kid: &str) -> JwkSet {
+        let mut jwks = JwkSet::new();
+        jwks.add_key(crate::Jwk {
+            kty: "oct".to_string(),
+            use_: Some("sig".to_string()),
+            key_ops: None,
+            alg: Some("HS256".to_string()),
+            kid: Some(kid.to_string()),
+            x5u: None,
+            x5c: None,
+            x5t: None,
+            x5t_s256: None,
+            n: None,
+            e: None,
+            d: None,
+            p: None,
+            q: None,
+            dp: None,
+            dq: None,
+            qi: None,
+            crv: None,
+            x: None,
+            y: None,
+            k: Some(URL_SAFE_NO_PAD.encode(secret.as_bytes())),
+        });
+        jwks
+    }
+
+    fn sign_with<T: serde::Serialize>(claims: &T, secret: &str, kid: &str) -> String {
+        JwtProcessor::new()
+            .sign_jwt(
+                claims,
+                &EncodingKey::from_secret(secret.as_bytes()),
+                Algorithm::HS256,
+                JwtArtifactType::EntityStatement,
+                Some(kid.to_string()),
+            )
+            .expect("JWT should sign")
+    }
+
+    fn keyed_configuration(
+        entity_id: &Url,
+        jwks: JwkSet,
+        authority_hints: Option<Vec<Url>>,
+        fetch_endpoint: Option<Url>,
+    ) -> EntityConfiguration {
+        let mut config = EntityConfiguration::new(
+            entity_id.clone(),
+            jwks,
+            future_expiration(),
+            chrono::Utc::now().timestamp(),
+        );
+        config.authority_hints = authority_hints;
+        if let Some(endpoint) = fetch_endpoint {
+            config.metadata = Some(build_federation_metadata(endpoint));
+        }
+        config
+    }
+
+    fn keyed_statement(issuer: &Url, subject: &Url, subject_keys: JwkSet) -> SubordinateStatement {
+        SubordinateStatement::new(
+            issuer.clone(),
+            subject.clone(),
+            future_expiration(),
+            chrono::Utc::now().timestamp(),
+            subject_keys,
+        )
+    }
+
+    /// A valid leaf -> intermediate -> anchor chain where every entity signs with its own key.
+    /// Returns (leaf_jwt, intermediate_about_leaf_jwt, anchor_about_intermediate_jwt, anchor_jwt).
+    fn distinct_key_chain() -> (String, String, String, String, Url, Url, Url) {
+        let leaf_url = Url::parse("https://leaf.example.test").unwrap();
+        let intermediate_url = Url::parse("https://intermediate.example.test").unwrap();
+        let anchor_url = Url::parse("https://anchor.example.test").unwrap();
+
+        let leaf_jwt = sign_with(
+            &keyed_configuration(
+                &leaf_url,
+                keyed_jwk_set(LEAF_SECRET, "leaf-key"),
+                Some(vec![intermediate_url.clone()]),
+                None,
+            ),
+            LEAF_SECRET,
+            "leaf-key",
+        );
+        let intermediate_about_leaf_jwt = sign_with(
+            &keyed_statement(&intermediate_url, &leaf_url, keyed_jwk_set(LEAF_SECRET, "leaf-key")),
+            INTERMEDIATE_SECRET,
+            "intermediate-key",
+        );
+        let anchor_about_intermediate_jwt = sign_with(
+            &keyed_statement(
+                &anchor_url,
+                &intermediate_url,
+                keyed_jwk_set(INTERMEDIATE_SECRET, "intermediate-key"),
+            ),
+            ANCHOR_SECRET,
+            "anchor-key",
+        );
+        let anchor_jwt = sign_with(
+            &keyed_configuration(&anchor_url, keyed_jwk_set(ANCHOR_SECRET, "anchor-key"), None, None),
+            ANCHOR_SECRET,
+            "anchor-key",
+        );
+
+        (
+            leaf_jwt,
+            intermediate_about_leaf_jwt,
+            anchor_about_intermediate_jwt,
+            anchor_jwt,
+            leaf_url,
+            intermediate_url,
+            anchor_url,
+        )
+    }
+
+    #[test]
+    fn try_new_accepts_chain_with_distinct_keys_per_entity() {
+        let (leaf, intermediate_about_leaf, anchor_about_intermediate, anchor, leaf_url, _, anchor_url) =
+            distinct_key_chain();
+
+        let chain = TrustChain::try_new(vec![leaf, intermediate_about_leaf, anchor_about_intermediate, anchor])
+            .expect("chain with per-entity keys should validate");
+
+        assert_eq!(chain.leaf_entity_id_and_configuration().unwrap().0, leaf_url);
+        assert_eq!(chain.trust_anchor_entity_id_and_configuration().unwrap().0, anchor_url);
+    }
+
+    #[test]
+    fn try_new_accepts_direct_leaf_to_anchor_chain_with_distinct_keys() {
+        let leaf_url = Url::parse("https://leaf.example.test").unwrap();
+        let anchor_url = Url::parse("https://anchor.example.test").unwrap();
+
+        let leaf = sign_with(
+            &keyed_configuration(
+                &leaf_url,
+                keyed_jwk_set(LEAF_SECRET, "leaf-key"),
+                Some(vec![anchor_url.clone()]),
+                None,
+            ),
+            LEAF_SECRET,
+            "leaf-key",
+        );
+        let anchor_about_leaf = sign_with(
+            &keyed_statement(&anchor_url, &leaf_url, keyed_jwk_set(LEAF_SECRET, "leaf-key")),
+            ANCHOR_SECRET,
+            "anchor-key",
+        );
+        let anchor = sign_with(
+            &keyed_configuration(&anchor_url, keyed_jwk_set(ANCHOR_SECRET, "anchor-key"), None, None),
+            ANCHOR_SECRET,
+            "anchor-key",
+        );
+
+        TrustChain::try_new(vec![leaf, anchor_about_leaf, anchor]).expect("direct chain should validate");
+    }
+
+    #[test]
+    fn try_new_rejects_subordinate_statement_signed_with_unrelated_key() {
+        let (leaf, intermediate_about_leaf, _, anchor, _, intermediate_url, anchor_url) = distinct_key_chain();
+
+        // Claims are well formed and name the real anchor as issuer, but the signature was made
+        // with an attacker key. Reusing the anchor's `kid` makes sure the signature itself is checked.
+        let forged_anchor_about_intermediate = sign_with(
+            &keyed_statement(
+                &anchor_url,
+                &intermediate_url,
+                keyed_jwk_set(INTERMEDIATE_SECRET, "intermediate-key"),
+            ),
+            ATTACKER_SECRET,
+            "anchor-key",
+        );
+
+        let err = TrustChain::try_new(vec![
+            leaf,
+            intermediate_about_leaf,
+            forged_anchor_about_intermediate,
+            anchor,
+        ])
+        .expect_err("subordinate statement with an unrelated signature must be rejected");
+        assert!(
+            matches!(err, FederationError::TrustChainValidation(_)),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn try_new_rejects_tampered_subordinate_statement_payload() {
+        let (leaf, intermediate_about_leaf, anchor_about_intermediate, anchor, _, _, _) = distinct_key_chain();
+
+        // Replace the payload of a correctly signed statement with a modified one, keeping the
+        // original signature. The claims still link structurally.
+        let mut parts: Vec<&str> = anchor_about_intermediate.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        let payload_json = URL_SAFE_NO_PAD.decode(parts[1]).unwrap();
+        let mut payload: serde_json::Value = serde_json::from_slice(&payload_json).unwrap();
+        payload["exp"] = serde_json::Value::from(future_expiration() + 3600);
+        let tampered_payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        parts[1] = &tampered_payload;
+        let tampered = parts.join(".");
+
+        TrustChain::try_new(vec![leaf, intermediate_about_leaf, tampered, anchor])
+            .expect_err("tampered subordinate statement must be rejected");
+    }
+
+    #[test]
+    fn try_new_rejects_leaf_key_not_endorsed_by_superior() {
+        let (leaf, _, anchor_about_intermediate, anchor, leaf_url, intermediate_url, _) = distinct_key_chain();
+
+        // The intermediate's statement about the leaf is correctly signed, but endorses a key that is
+        // not the one the leaf used to sign its configuration.
+        let intermediate_about_leaf_wrong_keys = sign_with(
+            &keyed_statement(&intermediate_url, &leaf_url, keyed_jwk_set(ATTACKER_SECRET, "leaf-key")),
+            INTERMEDIATE_SECRET,
+            "intermediate-key",
+        );
+
+        let err = TrustChain::try_new(vec![
+            leaf,
+            intermediate_about_leaf_wrong_keys,
+            anchor_about_intermediate,
+            anchor,
+        ])
+        .expect_err("leaf signed with a key its superior did not endorse must be rejected");
+        assert!(
+            err.to_string()
+                .contains("not signed with a key endorsed by its superior"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn try_new_rejects_subordinate_statement_from_unexpected_issuer() {
+        let (leaf, intermediate_about_leaf, _, anchor, _, intermediate_url, _) = distinct_key_chain();
+        let other_url = Url::parse("https://other.example.test").unwrap();
+
+        // Signed with the anchor's key, but claims to be issued by someone else than the anchor.
+        let wrong_issuer = sign_with(
+            &keyed_statement(
+                &other_url,
+                &intermediate_url,
+                keyed_jwk_set(INTERMEDIATE_SECRET, "intermediate-key"),
+            ),
+            ANCHOR_SECRET,
+            "anchor-key",
+        );
+
+        let err = TrustChain::try_new(vec![leaf, intermediate_about_leaf, wrong_issuer, anchor])
+            .expect_err("subordinate statement from an unexpected issuer must be rejected");
+        assert!(
+            err.to_string().contains("not properly linked"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// The combined L/S/V scenario from the bug report: an attacker-controlled leaf and superior
+    /// where the superior serves a configuration claiming the real anchor's identity.
+    #[tokio::test]
+    async fn all_chains_discovery_rejects_superior_claiming_another_anchors_identity() {
+        let leaf_server = MockServer::start().await;
+        let superior_server = MockServer::start().await;
+
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let superior_url = Url::parse(&format!("http://{}", superior_server.address())).unwrap();
+        // The victim anchor is never contacted; only its identifier is claimed.
+        let victim_url = Url::parse("https://victim-anchor.example.test").unwrap();
+
+        let leaf_config = keyed_configuration(
+            &leaf_url,
+            keyed_jwk_set(LEAF_SECRET, "leaf-key"),
+            Some(vec![superior_url.clone()]),
+            None,
+        );
+        mock_entity_configuration(&leaf_server, sign_with(&leaf_config, LEAF_SECRET, "leaf-key")).await;
+
+        // Served by S, but claims iss = sub = V, self-signed with attacker keys, terminal.
+        let forged_victim_config = keyed_configuration(
+            &victim_url,
+            keyed_jwk_set(ATTACKER_SECRET, "attacker-key"),
+            None,
+            Some(build_fetch_endpoint(&superior_url)),
+        );
+        mock_entity_configuration(
+            &superior_server,
+            sign_with(&forged_victim_config, ATTACKER_SECRET, "attacker-key"),
+        )
+        .await;
+
+        // The fetch endpoint on S returns "V says L is a subordinate", signed with the attacker key.
+        mock_subordinate_statement(
+            &superior_server,
+            &leaf_url,
+            sign_with(
+                &keyed_statement(&victim_url, &leaf_url, keyed_jwk_set(LEAF_SECRET, "leaf-key")),
+                ATTACKER_SECRET,
+                "attacker-key",
+            ),
+        )
+        .await;
+
+        let client = FederationClient::new();
+
+        let err = client
+            .discover_all_trust_chains(&leaf_url)
+            .await
+            .expect_err("forged anchor identity must not yield a trust chain");
+        assert!(
+            matches!(err, FederationError::EntityResolution(_)),
+            "unexpected error: {err:?}"
+        );
+
+        // Sanity check: the raw document S serves does claim V and is internally consistent, so the
+        // rejection comes from binding it to the requested identity.
+        let raw = client.fetch_entity_configuration(&superior_url).await.unwrap();
+        let claimed: EntityConfiguration = extract_claims_unverified(&raw).unwrap();
+        assert_eq!(claimed.claims.iss, victim_url);
+        assert!(EntityConfiguration::from_verified_jwt(&raw, &victim_url).is_ok());
+        assert!(EntityConfiguration::from_verified_jwt(&raw, &superior_url).is_err());
+    }
+
+    #[tokio::test]
+    async fn anchored_discovery_rejects_start_configuration_claiming_another_identity() {
+        let leaf_server = MockServer::start().await;
+        let anchor_server = MockServer::start().await;
+
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let anchor_url = Url::parse(&format!("http://{}", anchor_server.address())).unwrap();
+        let other_url = Url::parse("https://other-leaf.example.test").unwrap();
+
+        // Served from the leaf server, but claims to be `other`.
+        let impostor_config = keyed_configuration(
+            &other_url,
+            keyed_jwk_set(LEAF_SECRET, "leaf-key"),
+            Some(vec![anchor_url.clone()]),
+            None,
+        );
+        mock_entity_configuration(&leaf_server, sign_with(&impostor_config, LEAF_SECRET, "leaf-key")).await;
+
+        let anchor_config = keyed_configuration(
+            &anchor_url,
+            keyed_jwk_set(ANCHOR_SECRET, "anchor-key"),
+            None,
+            Some(build_fetch_endpoint(&anchor_url)),
+        );
+        mock_entity_configuration(&anchor_server, sign_with(&anchor_config, ANCHOR_SECRET, "anchor-key")).await;
+        mock_subordinate_statement(
+            &anchor_server,
+            &other_url,
+            sign_with(
+                &keyed_statement(&anchor_url, &other_url, keyed_jwk_set(LEAF_SECRET, "leaf-key")),
+                ANCHOR_SECRET,
+                "anchor-key",
+            ),
+        )
+        .await;
+
+        let client = FederationClient::new();
+
+        let err = client
+            .discover_trust_chain(&leaf_url, Some(std::slice::from_ref(&anchor_url)))
+            .await
+            .expect_err("start configuration with a foreign identity must be rejected");
+        assert!(err.to_string().contains("identity mismatch"), "unexpected error: {err}");
+
+        client
+            .discover_all_trust_chains(&leaf_url)
+            .await
+            .expect_err("all-chains discovery must reject it as well");
+    }
+
+    #[tokio::test]
+    async fn anchored_discovery_rejects_subordinate_statement_signed_with_unrelated_key() {
+        let leaf_server = MockServer::start().await;
+        let anchor_server = MockServer::start().await;
+
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let anchor_url = Url::parse(&format!("http://{}", anchor_server.address())).unwrap();
+
+        let leaf_config = keyed_configuration(
+            &leaf_url,
+            keyed_jwk_set(LEAF_SECRET, "leaf-key"),
+            Some(vec![anchor_url.clone()]),
+            None,
+        );
+        mock_entity_configuration(&leaf_server, sign_with(&leaf_config, LEAF_SECRET, "leaf-key")).await;
+
+        let anchor_config = keyed_configuration(
+            &anchor_url,
+            keyed_jwk_set(ANCHOR_SECRET, "anchor-key"),
+            None,
+            Some(build_fetch_endpoint(&anchor_url)),
+        );
+        mock_entity_configuration(&anchor_server, sign_with(&anchor_config, ANCHOR_SECRET, "anchor-key")).await;
+
+        // Well-formed claims, but not signed by the anchor.
+        mock_subordinate_statement(
+            &anchor_server,
+            &leaf_url,
+            sign_with(
+                &keyed_statement(&anchor_url, &leaf_url, keyed_jwk_set(LEAF_SECRET, "leaf-key")),
+                ATTACKER_SECRET,
+                "anchor-key",
+            ),
+        )
+        .await;
+
+        let client = FederationClient::new();
+
+        let err = client
+            .discover_trust_chain(&leaf_url, Some(&[anchor_url]))
+            .await
+            .expect_err("unverifiable subordinate statement must be rejected");
+        assert!(
+            err.to_string().contains("not signed with an authenticated key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn all_chains_discovery_returns_only_authenticated_branches() {
+        let leaf_server = MockServer::start().await;
+        let good_anchor_server = MockServer::start().await;
+        let bad_anchor_server = MockServer::start().await;
+
+        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let good_anchor_url = Url::parse(&format!("http://{}", good_anchor_server.address())).unwrap();
+        let bad_anchor_url = Url::parse(&format!("http://{}", bad_anchor_server.address())).unwrap();
+
+        let leaf_config = keyed_configuration(
+            &leaf_url,
+            keyed_jwk_set(LEAF_SECRET, "leaf-key"),
+            Some(vec![bad_anchor_url.clone(), good_anchor_url.clone()]),
+            None,
+        );
+        mock_entity_configuration(&leaf_server, sign_with(&leaf_config, LEAF_SECRET, "leaf-key")).await;
+
+        // Good branch: properly signed everywhere.
+        let good_anchor_config = keyed_configuration(
+            &good_anchor_url,
+            keyed_jwk_set(ANCHOR_SECRET, "anchor-key"),
+            None,
+            Some(build_fetch_endpoint(&good_anchor_url)),
+        );
+        mock_entity_configuration(
+            &good_anchor_server,
+            sign_with(&good_anchor_config, ANCHOR_SECRET, "anchor-key"),
+        )
+        .await;
+        mock_subordinate_statement(
+            &good_anchor_server,
+            &leaf_url,
+            sign_with(
+                &keyed_statement(&good_anchor_url, &leaf_url, keyed_jwk_set(LEAF_SECRET, "leaf-key")),
+                ANCHOR_SECRET,
+                "anchor-key",
+            ),
+        )
+        .await;
+
+        // Bad branch: the anchor's statement about the leaf endorses a key the leaf does not use.
+        let bad_anchor_config = keyed_configuration(
+            &bad_anchor_url,
+            keyed_jwk_set(INTERMEDIATE_SECRET, "bad-anchor-key"),
+            None,
+            Some(build_fetch_endpoint(&bad_anchor_url)),
+        );
+        mock_entity_configuration(
+            &bad_anchor_server,
+            sign_with(&bad_anchor_config, INTERMEDIATE_SECRET, "bad-anchor-key"),
+        )
+        .await;
+        mock_subordinate_statement(
+            &bad_anchor_server,
+            &leaf_url,
+            sign_with(
+                &keyed_statement(&bad_anchor_url, &leaf_url, keyed_jwk_set(ATTACKER_SECRET, "leaf-key")),
+                INTERMEDIATE_SECRET,
+                "bad-anchor-key",
+            ),
+        )
+        .await;
+
+        let client = FederationClient::new();
+
+        let chains = client
+            .discover_all_trust_chains(&leaf_url)
+            .await
+            .expect("the valid sibling branch should still be discovered");
+
+        assert_eq!(chains.len(), 1, "only the authenticated branch may be returned");
+        assert_eq!(
+            chains[0].trust_anchor_entity_id_and_configuration().unwrap().0,
+            good_anchor_url
+        );
+        assert_eq!(chains[0].leaf_entity_id_and_configuration().unwrap().0, leaf_url);
     }
 }
