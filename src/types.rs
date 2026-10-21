@@ -40,6 +40,19 @@ pub enum EntityType {
     OauthClient,
 }
 
+/// A Trust Mark as an Entity Configuration carries it in its `trust_marks` claim: the Trust Mark
+/// type identifier next to the signed Trust Mark JWT, whose claims are [`TrustMark`].
+///
+/// Reference: OpenID Federation 1.0 - Section 3.1.2 Claims that MUST or MAY Appear in an Entity Configuration
+/// https://openid.net/specs/openid-federation-1_0.html#name-claims-that-must-or-may-app
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustMarkEntry {
+    /// MUST equal the `trust_mark_type` claim of the Trust Mark JWT in `trust_mark`.
+    pub trust_mark_type: String,
+    /// The signed Trust Mark JWT.
+    pub trust_mark: String,
+}
+
 /// Trust mark as defined in the OpenID Federation specification.
 ///
 /// Reference: OpenID Federation 1.0 - Section 6 Trust Marks

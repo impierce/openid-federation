@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use crate::{
     extract_claims_unverified, Constraints, EntityId, EntityMetadata, FederationError, FederationResult, JwkSet,
-    JwtArtifactType, JwtClaims, JwtProcessor, PolicyOperators, TrustMark, TrustMarkIssuers, TrustMarkOwners,
+    JwtArtifactType, JwtClaims, JwtProcessor, PolicyOperators, TrustMarkEntry, TrustMarkIssuers, TrustMarkOwners,
 };
 
 /// Subordinate Statement as defined in the OpenID Federation specification.
@@ -51,7 +51,7 @@ pub struct EntityConfiguration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_anchor_hints: Option<Vec<EntityId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trust_marks: Option<Vec<TrustMark>>,
+    pub trust_marks: Option<Vec<TrustMarkEntry>>,
     // Only allowed if the entity is a trust anchor, otherwise IGNORE.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_mark_issuers: Option<TrustMarkIssuers>,
@@ -229,7 +229,7 @@ impl EntityConfiguration {
         self
     }
 
-    pub fn with_trust_marks(mut self, trust_marks: Vec<TrustMark>) -> Self {
+    pub fn with_trust_marks(mut self, trust_marks: Vec<TrustMarkEntry>) -> Self {
         self.trust_marks = Some(trust_marks);
         self
     }

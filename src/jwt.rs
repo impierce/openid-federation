@@ -107,11 +107,17 @@ pub struct JwtClaims {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aud: Option<serde_json::Value>, // Can be string or array of strings
     /// Expiration timestamp (seconds since Unix epoch, per RFC 7519 §4.1.4)
+    #[serde(deserialize_with = "numeric_date::deserialize")]
     pub exp: i64,
     /// Not before timestamp (seconds since Unix epoch, per RFC 7519 §4.1.5)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "numeric_date::deserialize_option"
+    )]
     pub nbf: Option<i64>,
     /// Issued at timestamp (seconds since Unix epoch, per RFC 7519 §4.1.6)
+    #[serde(deserialize_with = "numeric_date::deserialize")]
     pub iat: i64,
     /// JWT ID
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,6 +125,84 @@ pub struct JwtClaims {
     /// Additional claims
     #[serde(flatten)]
     pub additional: HashMap<String, serde_json::Value>,
+}
+
+/// Deserialization of a NumericDate, which RFC 7519 §2 defines as any JSON number of seconds:
+/// "non-integer values can be represented". Some implementations send `1.7E9`, so a
+/// non-integer is accepted and rounded to whole seconds, as `jsonwebtoken` does when validating.
+///
+/// Read through [`serde_json::Number`], which also understands how numbers are buffered inside
+/// `#[serde(flatten)]` when `serde_json`'s `arbitrary_precision` feature is enabled.
+///
+/// Reference: https://www.rfc-editor.org/rfc/rfc7519#section-2
+mod numeric_date {
+    use serde::{de, Deserialize, Deserializer};
+
+    /// A NumericDate wrapper, so an optional claim can reuse the conversion.
+    struct NumericDate(i64);
+
+    impl<'de> Deserialize<'de> for NumericDate {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let number = serde_json::Number::deserialize(deserializer)?;
+            if let Some(seconds) = number.as_i64() {
+                return Ok(NumericDate(seconds));
+            }
+            number
+                .as_f64()
+                .map(f64::round)
+                .filter(|seconds| seconds.is_finite() && *seconds >= i64::MIN as f64 && *seconds < i64::MAX as f64)
+                .map(|seconds| NumericDate(seconds as i64))
+                .ok_or_else(|| de::Error::custom(format!("NumericDate {number} is out of range")))
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+        NumericDate::deserialize(deserializer).map(|date| date.0)
+    }
+
+    pub(super) fn deserialize_option<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
+        Ok(Option::<NumericDate>::deserialize(deserializer)?.map(|date| date.0))
+    }
+}
+
+/// The time claims of a JWT, read as NumericDates.
+#[derive(Deserialize)]
+struct TimeClaims {
+    #[serde(default, deserialize_with = "numeric_date::deserialize_option")]
+    exp: Option<i64>,
+    #[serde(default, deserialize_with = "numeric_date::deserialize_option")]
+    nbf: Option<i64>,
+}
+
+impl TimeClaims {
+    /// Applies `validation`'s time checks the way `jsonwebtoken` does, including its leeway.
+    fn validate(&self, validation: &Validation) -> FederationResult<()> {
+        use jsonwebtoken::errors::{Error, ErrorKind};
+
+        let now = chrono::Utc::now().timestamp();
+        let leeway = i64::try_from(validation.leeway).unwrap_or(i64::MAX);
+
+        for (claim, value) in [("exp", self.exp), ("nbf", self.nbf)] {
+            if value.is_none() && validation.required_spec_claims.contains(claim) {
+                return Err(Error::from(ErrorKind::MissingRequiredClaim(claim.to_string())).into());
+            }
+        }
+        if validation.validate_exp {
+            if let Some(exp) = self.exp {
+                if exp < now.saturating_sub(leeway) {
+                    return Err(Error::from(ErrorKind::ExpiredSignature).into());
+                }
+            }
+        }
+        if validation.validate_nbf {
+            if let Some(nbf) = self.nbf {
+                if nbf > now.saturating_add(leeway) {
+                    return Err(Error::from(ErrorKind::ImmatureSignature).into());
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// JWT utilities for federation operations.
@@ -200,9 +284,24 @@ impl JwtProcessor {
         let mut validation = self.validation.clone();
         validation.algorithms = vec![algorithm];
 
-        decode::<T>(token, key, &validation)
+        // `jsonwebtoken` cannot read a non-integer NumericDate when `serde_json`'s
+        // `arbitrary_precision` feature is enabled anywhere in the build, and then reports `exp` as
+        // missing. It only verifies the signature here; `exp` and `nbf` are checked below instead,
+        // with the same settings.
+        let time_validation = validation.clone();
+        validation.validate_exp = false;
+        validation.validate_nbf = false;
+        validation.required_spec_claims.remove("exp");
+        validation.required_spec_claims.remove("nbf");
+
+        let claims = decode::<T>(token, key, &validation)
             .map(|token_data| token_data.claims)
-            .map_err(FederationError::from)
+            .map_err(FederationError::from)?;
+
+        let times: TimeClaims = extract_claims_unverified(token)?;
+        times.validate(&time_validation)?;
+
+        Ok(claims)
     }
 
     /// Verify and decode a JWT using a JWK Set, enforcing artifact type.
@@ -249,6 +348,9 @@ pub fn extract_claims_unverified<T: for<'de> Deserialize<'de>>(token: &str) -> F
     validation.insecure_disable_signature_validation();
     validation.validate_exp = false;
     validation.validate_nbf = false;
+    // Nothing is validated here, and `jsonwebtoken` misreads a non-integer `exp` as missing when
+    // `serde_json`'s `arbitrary_precision` feature is enabled; `T` requires the claims it needs.
+    validation.required_spec_claims.clear();
 
     decode::<T>(token, &DecodingKey::from_secret(&[]), &validation)
         .map(|token_data| token_data.claims)
@@ -308,6 +410,74 @@ mod tests {
         assert_eq!(
             JwtArtifactType::TrustMarkStatusResponse.header_value(),
             "trust-mark-status-response+jwt"
+        );
+    }
+
+    /// Signs `claims` as an Entity Statement and verifies them again.
+    fn verify_entity_statement(claims: serde_json::Value) -> FederationResult<serde_json::Value> {
+        let (key, secret) = create_test_key();
+        let processor = JwtProcessor::new();
+        let token = processor
+            .sign_jwt(&claims, &key, Algorithm::HS256, JwtArtifactType::EntityStatement, None)
+            .unwrap();
+        processor.verify_jwt(
+            &token,
+            &DecodingKey::from_secret(secret.as_bytes()),
+            Algorithm::HS256,
+            JwtArtifactType::EntityStatement,
+        )
+    }
+
+    fn time_error(result: FederationResult<serde_json::Value>) -> jsonwebtoken::errors::ErrorKind {
+        match result {
+            Err(FederationError::Jwt(err)) => err.into_kind(),
+            other => panic!("expected a JWT error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_verify_jwt_accepts_a_non_integer_exp() {
+        let exp = chrono::Utc::now().timestamp() as f64 + 3600.5;
+
+        assert!(verify_entity_statement(serde_json::json!({ "exp": exp })).is_ok());
+    }
+
+    #[test]
+    fn test_verify_jwt_accepts_an_exp_within_the_leeway() {
+        let exp = chrono::Utc::now().timestamp() - 30;
+
+        assert!(verify_entity_statement(serde_json::json!({ "exp": exp })).is_ok());
+    }
+
+    #[test]
+    fn test_verify_jwt_rejects_an_expired_jwt() {
+        let exp = chrono::Utc::now().timestamp() - 120;
+
+        assert_eq!(
+            time_error(verify_entity_statement(serde_json::json!({ "exp": exp }))),
+            jsonwebtoken::errors::ErrorKind::ExpiredSignature
+        );
+    }
+
+    #[test]
+    fn test_verify_jwt_rejects_a_jwt_that_is_not_yet_valid() {
+        let now = chrono::Utc::now().timestamp();
+
+        assert_eq!(
+            time_error(verify_entity_statement(
+                serde_json::json!({ "exp": now + 3600, "nbf": now + 120 })
+            )),
+            jsonwebtoken::errors::ErrorKind::ImmatureSignature
+        );
+    }
+
+    #[test]
+    fn test_verify_jwt_requires_exp() {
+        assert_eq!(
+            time_error(verify_entity_statement(
+                serde_json::json!({ "iss": "https://example.com" })
+            )),
+            jsonwebtoken::errors::ErrorKind::MissingRequiredClaim("exp".to_string())
         );
     }
 

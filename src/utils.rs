@@ -492,15 +492,17 @@ impl FederationClient {
             .collect()
     }
 
-    /// Build the well-known OpenID Federation URL for an entity.
+    /// Build the well-known OpenID Federation URL for an entity: the Entity Identifier, including
+    /// any path and without a trailing `/`, followed by `/.well-known/openid-federation`.
     ///
-    /// Reference: OpenID Federation 1.0 - Section 8.1 Entity Configuration Endpoint
-    /// https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration-endpoi
+    /// Reference: OpenID Federation 1.0 - Section 9 Obtaining Federation Entity Configuration Information
+    /// https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity-
     fn build_well_known_url(&self, entity_id: &EntityId) -> FederationResult<Url> {
         let mut url = entity_id.clone();
-        url.set_path("/.well-known/openid-federation");
         url.set_query(None);
         url.set_fragment(None);
+        let path = format!("{}/.well-known/openid-federation", url.path().trim_end_matches('/'));
+        url.set_path(&path);
         Ok(url)
     }
 }
@@ -565,4 +567,40 @@ impl UrlValidator {
 /// Get a timestamp that expires after the specified duration from now.
 pub fn expires_in(duration: Duration) -> i64 {
     Utc::now().timestamp() + duration.num_seconds()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn well_known_url(entity_id: &str) -> String {
+        FederationClient::new()
+            .build_well_known_url(&Url::parse(entity_id).unwrap())
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn appends_the_well_known_path_to_a_host_only_entity_identifier() {
+        assert_eq!(
+            well_known_url("https://entity.example"),
+            "https://entity.example/.well-known/openid-federation"
+        );
+    }
+
+    #[test]
+    fn keeps_the_path_of_an_entity_identifier() {
+        assert_eq!(
+            well_known_url("https://entity.example/federation"),
+            "https://entity.example/federation/.well-known/openid-federation"
+        );
+    }
+
+    #[test]
+    fn removes_a_trailing_slash_before_appending_the_well_known_path() {
+        assert_eq!(
+            well_known_url("https://entity.example/federation/"),
+            "https://entity.example/federation/.well-known/openid-federation"
+        );
+    }
 }
