@@ -1,6 +1,7 @@
 //! Common types used throughout the OpenID Federation implementation.
 
-use crate::{jwt::JwtClaims, JwkSet};
+use crate::{jwt::JwtClaims, FederationError, FederationResult, JwkSet};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
@@ -38,6 +39,59 @@ pub enum EntityType {
     OauthProtectedResource,
     /// OAuth Client
     OauthClient,
+}
+
+/// A Trust Mark as an Entity Configuration carries it in its `trust_marks` claim: the Trust Mark
+/// type identifier next to the signed Trust Mark JWT, whose claims are [`TrustMark`].
+///
+/// Reference: OpenID Federation 1.0 - Section 3.1.2 Claims that MUST or MAY Appear in an Entity Configuration
+/// https://openid.net/specs/openid-federation-1_0.html#name-claims-that-must-or-may-app
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustMarkEntry {
+    /// MUST equal the `trust_mark_type` claim of the Trust Mark JWT in `trust_mark`.
+    pub trust_mark_type: String,
+    /// The signed Trust Mark JWT.
+    pub trust_mark: String,
+}
+
+impl TrustMarkEntry {
+    /// Validate the syntax of the entry: `trust_mark` is a JWT whose payload carries a
+    /// `trust_mark_type` claim equal to the entry's `trust_mark_type`.
+    ///
+    /// This does not verify the Trust Mark's signature, nor whether its issuer is trusted. The
+    /// specification keeps that evaluation separate from the syntactic validation of an Entity
+    /// Statement, and a Trust Mark signed with an algorithm this crate cannot verify is still a
+    /// well-formed entry.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 3.2 Entity Statement Validation
+    /// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-validation
+    pub fn validate(&self) -> FederationResult<()> {
+        let invalid = |reason: &str| {
+            FederationError::InvalidSubordinateStatement(format!(
+                "Trust Mark of type {}: {reason}",
+                self.trust_mark_type
+            ))
+        };
+
+        let mut segments = self.trust_mark.split('.');
+        let payload = match (segments.next(), segments.next(), segments.next(), segments.next()) {
+            (Some(_), Some(payload), Some(_), None) => payload,
+            _ => return Err(invalid("trust_mark is not a JWT in compact serialization")),
+        };
+        let payload = URL_SAFE_NO_PAD
+            .decode(payload)
+            .map_err(|_| invalid("the payload of trust_mark is not base64url encoded"))?;
+        let claims: serde_json::Value =
+            serde_json::from_slice(&payload).map_err(|_| invalid("the payload of trust_mark is not a JSON object"))?;
+
+        match claims.get("trust_mark_type").and_then(serde_json::Value::as_str) {
+            Some(claimed) if claimed == self.trust_mark_type => Ok(()),
+            Some(claimed) => Err(invalid(&format!(
+                "the trust_mark_type claim of trust_mark is {claimed}, which differs from the entry"
+            ))),
+            None => Err(invalid("trust_mark has no trust_mark_type claim")),
+        }
+    }
 }
 
 /// Trust mark as defined in the OpenID Federation specification.
