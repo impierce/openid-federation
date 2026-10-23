@@ -12,7 +12,7 @@ use crate::{
 /// Subordinate Statement as defined in the OpenID Federation specification.
 ///
 /// Reference: OpenID Federation 1.0 - Section 3.1 Subordinate Statement
-/// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement
+/// <https://openid.net/specs/openid-federation-1_0.html#name-entity-statement>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubordinateStatement {
     #[serde(flatten)]
@@ -35,7 +35,7 @@ pub struct SubordinateStatement {
 /// Entity Configuration as defined in the OpenID Federation specification.
 ///
 /// Reference: OpenID Federation 1.0 - Section 3.2 Entity Configuration
-/// https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration
+/// <https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntityConfiguration {
     // Required if the entity is not the trust anchor, but a leaf or intermediate entity.
@@ -116,7 +116,7 @@ impl SubordinateStatement {
     ///    `jwks` of the Subordinate Statement about `issuer`, or the Trust Anchor's keys).
     ///
     /// Reference: OpenID Federation 1.0 - Section 10.2 Validating a Trust Chain
-    /// https://openid.net/specs/openid-federation-1_0.html#name-validating-a-trust-chain
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-validating-a-trust-chain>
     pub fn from_verified_jwt(
         jwt: &str,
         issuer: &EntityId,
@@ -154,7 +154,7 @@ impl SubordinateStatement {
     /// Validate the subordinate statement structure, this does not validate the JWT and its signature.
     ///
     /// Reference: OpenID Federation 1.0 - Section 3.1.1 Subordinate Statement Validation
-    /// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-validation
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-validation>
     pub fn validate(&self) -> FederationResult<()> {
         if self.claims.iss == self.claims.sub {
             return Err(FederationError::InvalidSubordinateStatement(
@@ -262,7 +262,7 @@ impl EntityConfiguration {
     /// by the entity's superior.
     ///
     /// Reference: OpenID Federation 1.0 - Section 9 Obtaining Federation Entity Configuration Information
-    /// https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity-
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity->
     pub fn from_verified_jwt(jwt: &str, entity_id: &EntityId) -> FederationResult<Self> {
         let unverified: Self = extract_claims_unverified(jwt)?;
         unverified.validate()?;
@@ -292,7 +292,7 @@ impl EntityConfiguration {
     /// valid and trusted is a separate step.
     ///
     /// Reference: OpenID Federation 1.0 - Section 3.2.1 Entity Configuration Validation
-    /// https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration-valida
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration-valida>
     pub fn validate(&self) -> FederationResult<()> {
         if self.claims.iss != self.claims.sub {
             return Err(FederationError::InvalidSubordinateStatement(

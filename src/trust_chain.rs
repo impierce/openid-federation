@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// Trust Chain as defined in the OpenID Federation specification.
 ///
 /// Reference: OpenID Federation 1.0 - Section 4 Trust Chains  
-/// https://openid.net/specs/openid-federation-1_0.html#name-trust-chains
+/// <https://openid.net/specs/openid-federation-1_0.html#name-trust-chains>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrustChain {
     /// Array of Entity Configurations and Subordinate Statements that form the trust chain
@@ -34,7 +34,7 @@ impl TrustChain {
     /// Calculate the minimum expiration timestamp across all JWT statements in the chain.
     ///
     /// Reference: OpenID Federation 1.0 - Section 10.4 Calculating Trust Chain Expiration
-    /// https://openid.net/specs/openid-federation-1_0.html#name-calculating-trust-chain-expi
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-calculating-trust-chain-expi>
     ///
     /// # Returns
     /// The UNIX timestamp (seconds) when the trust chain expires (the minimum of all exp claims).
@@ -134,7 +134,7 @@ impl TrustChain {
     /// applied to every statement as well.
     ///
     /// Reference: OpenID Federation 1.0 - Section 10.2 Validating a Trust Chain
-    /// https://openid.net/specs/openid-federation-1_0.html#name-validating-a-trust-chain
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-validating-a-trust-chain>
     pub fn try_new(trust_chain: Vec<String>) -> FederationResult<Self> {
         let chain_len = trust_chain.len();
 
