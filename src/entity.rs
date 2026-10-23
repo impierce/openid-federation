@@ -229,6 +229,7 @@ impl EntityConfiguration {
         self
     }
 
+    /// Set the Trust Marks the entity holds, each as its type next to the signed Trust Mark JWT.
     pub fn with_trust_marks(mut self, trust_marks: Vec<TrustMarkEntry>) -> Self {
         self.trust_marks = Some(trust_marks);
         self
@@ -286,6 +287,10 @@ impl EntityConfiguration {
     // TODO: validate JWT here as well, not only contents. This should check the exp and nbf claims already.
     /// Validate the entity configuration structure, this does not validate the JWT and its signature.
     ///
+    /// Each `trust_marks` entry is checked with [`TrustMarkEntry::validate`]: its type must equal
+    /// the `trust_mark_type` claim of its Trust Mark JWT. Whether the Trust Marks themselves are
+    /// valid and trusted is a separate step.
+    ///
     /// Reference: OpenID Federation 1.0 - Section 3.2.1 Entity Configuration Validation
     /// https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration-valida
     pub fn validate(&self) -> FederationResult<()> {
@@ -313,6 +318,10 @@ impl EntityConfiguration {
                     "Entity configuration is not yet valid".to_string(),
                 ));
             }
+        }
+
+        for entry in self.trust_marks.iter().flatten() {
+            entry.validate()?;
         }
 
         // TODO: Validate `crit` if present according to the specification.

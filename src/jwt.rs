@@ -142,6 +142,7 @@ mod numeric_date {
     struct NumericDate(i64);
 
     impl<'de> Deserialize<'de> for NumericDate {
+        /// Read any JSON number, rounding a non-integer to whole seconds.
         fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
             let number = serde_json::Number::deserialize(deserializer)?;
             if let Some(seconds) = number.as_i64() {
@@ -156,10 +157,12 @@ mod numeric_date {
         }
     }
 
+    /// Deserialize a required NumericDate claim, for `#[serde(deserialize_with)]`.
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
         NumericDate::deserialize(deserializer).map(|date| date.0)
     }
 
+    /// Deserialize an optional NumericDate claim, for `#[serde(deserialize_with)]`.
     pub(super) fn deserialize_option<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
         Ok(Option::<NumericDate>::deserialize(deserializer)?.map(|date| date.0))
     }

@@ -29,6 +29,7 @@ pub use utils::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use chrono::Duration;
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use std::collections::HashSet;
@@ -82,6 +83,115 @@ mod tests {
             serde_json::to_value(&config).unwrap()["trust_marks"],
             configuration["trust_marks"]
         );
+    }
+
+    /// A Trust Mark JWT of `trust_mark_type`, signed with the test key.
+    fn encode_trust_mark(trust_mark_type: &str) -> String {
+        let iat = chrono::Utc::now().timestamp();
+        let claims = serde_json::json!({
+            "iss": "https://accreditation.example",
+            "sub": "https://entity.example",
+            "iat": iat,
+            "trust_mark_type": trust_mark_type,
+        });
+        let mut header = Header::new(Algorithm::HS256);
+        header.typ = Some("trust-mark+jwt".to_string());
+        encode(&header, &claims, &EncodingKey::from_secret(b"test_secret_key")).unwrap()
+    }
+
+    /// An Entity Configuration of `entity_id` holding one Trust Mark entry.
+    fn entity_configuration_with_trust_mark(entity_id: &EntityId, entry: TrustMarkEntry) -> EntityConfiguration {
+        let mut jwks = JwkSet::new();
+        jwks.add_key(create_test_symmetric_key());
+        let iat = chrono::Utc::now().timestamp();
+        EntityConfiguration::new(entity_id.clone(), jwks, iat + 3600, iat).with_trust_marks(vec![entry])
+    }
+
+    /// Section 3.2: the `trust_mark_type` of each entry matches the claim in its Trust Mark JWT.
+    #[test]
+    fn test_entity_configuration_accepts_a_trust_mark_whose_type_matches() {
+        let entity_id = Url::parse("https://entity.example").unwrap();
+        let trust_mark_type = "https://accreditation.example/trust-marks/member";
+        let config = entity_configuration_with_trust_mark(
+            &entity_id,
+            TrustMarkEntry {
+                trust_mark_type: trust_mark_type.to_string(),
+                trust_mark: encode_trust_mark(trust_mark_type),
+            },
+        );
+
+        config.validate().unwrap();
+        let jwt = encode_entity_configuration(&config, &EncodingKey::from_secret(b"test_secret_key"));
+        assert_eq!(
+            EntityConfiguration::from_verified_jwt(&jwt, &entity_id).unwrap(),
+            config
+        );
+    }
+
+    #[test]
+    fn test_entity_configuration_rejects_a_trust_mark_whose_type_differs() {
+        let entity_id = Url::parse("https://entity.example").unwrap();
+        let config = entity_configuration_with_trust_mark(
+            &entity_id,
+            TrustMarkEntry {
+                trust_mark_type: "https://accreditation.example/trust-marks/member".to_string(),
+                trust_mark: encode_trust_mark("https://accreditation.example/trust-marks/auditor"),
+            },
+        );
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("trust-marks/member"), "{error}");
+        assert!(error.contains("trust-marks/auditor"), "{error}");
+        let jwt = encode_entity_configuration(&config, &EncodingKey::from_secret(b"test_secret_key"));
+        assert!(EntityConfiguration::from_verified_jwt(&jwt, &entity_id).is_err());
+    }
+
+    #[test]
+    fn test_entity_configuration_rejects_a_malformed_trust_mark() {
+        let entity_id = Url::parse("https://entity.example").unwrap();
+        let trust_mark_type = "https://accreditation.example/trust-marks/member".to_string();
+        let malformed = [
+            // Not a JWT at all.
+            "not-a-jwt",
+            // Too many segments.
+            "a.b.c.d",
+            // The payload is not base64url.
+            "eyJhbGciOiJFUzI1NiJ9.!!!.c2lnbmF0dXJl",
+            // The payload is not a JSON object.
+            "eyJhbGciOiJFUzI1NiJ9.bm90IGpzb24.c2lnbmF0dXJl",
+            // The payload has no `trust_mark_type` claim.
+            "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJodHRwczovL3RtaS5leGFtcGxlIn0.c2lnbmF0dXJl",
+        ];
+
+        for trust_mark in malformed {
+            let config = entity_configuration_with_trust_mark(
+                &entity_id,
+                TrustMarkEntry {
+                    trust_mark_type: trust_mark_type.clone(),
+                    trust_mark: trust_mark.to_string(),
+                },
+            );
+            assert!(config.validate().is_err(), "{trust_mark} was accepted");
+        }
+    }
+
+    /// Syntactic validation does not need to verify the Trust Mark, so an algorithm this crate
+    /// cannot verify, such as ES512, does not make the Entity Configuration invalid.
+    #[test]
+    fn test_entity_configuration_accepts_a_trust_mark_signed_with_an_unsupported_algorithm() {
+        let entity_id = Url::parse("https://entity.example").unwrap();
+        let trust_mark_type = "https://accreditation.example/trust-marks/member";
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"ES512","typ":"trust-mark+jwt"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"trust_mark_type":"{trust_mark_type}"}}"#));
+        let config = entity_configuration_with_trust_mark(
+            &entity_id,
+            TrustMarkEntry {
+                trust_mark_type: trust_mark_type.to_string(),
+                trust_mark: format!("{header}.{payload}.c2lnbmF0dXJl"),
+            },
+        );
+
+        config.validate().unwrap();
     }
 
     /// RFC 7519 NumericDates may be non-integer JSON numbers, which some implementations send in
