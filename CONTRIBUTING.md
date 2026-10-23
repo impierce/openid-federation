@@ -53,9 +53,9 @@ fuzz/run.sh entity_statement 600      # one target, ten minutes
 Pull requests are squash-merged, so the **pull request title** becomes the commit message on `main`.
 It must follow [Conventional Commits](https://www.conventionalcommits.org/), which CI checks:
 
-- `` feat: resolve metadata through the trust chain ``
-- `fix(jwt): accept non-integer NumericDates`
-- `feat!: rename `TrustMark` to `TrustMarkClaims`` (breaking change)
+- `` feat: resolve metadata through trust chain ``
+- `` fix(jwt): accept non-integer NumericDates ``
+- `` feat!: rename `TrustMark` to `TrustMarkClaims` `` (breaking change)
 
 The title also determines the next version number and the changelog entry, so describe the change from a user's point of view.
 Write it in terse commit style: drop articles (_the_, _a_, _an_) and wrap code literals in backticks, as in `` fix(entity): reject Trust Mark entries whose type differs from JWT claim ``.
