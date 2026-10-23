@@ -1,7 +1,7 @@
 # release-plz configuration: https://release-plz.dev/docs/config
 
 [workspace]
-# Publish only when the release PR is merged, not on every push to dev.
+# Publish only when the release PR is merged, not on every push to main.
 # This also avoids the race between squash merges and a running release.
 release_always = false
 pr_labels = ["release"]
