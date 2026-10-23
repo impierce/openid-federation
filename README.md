@@ -116,6 +116,11 @@ The library is organized into several key modules:
 - `utils`: Utility functions for HTTP, validation, and time handling
 - `error`: Comprehensive error types
 
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the checks CI runs and the pull request conventions, [`docs/DESIGN.md`](docs/DESIGN.md) for the architecture and trust model, and [`docs/FEATURES.md`](docs/FEATURES.md) for what is implemented and what is planned.
+Please report vulnerabilities privately, as described in [`SECURITY.md`](SECURITY.md).
+
 ## License
 
-Licensed under the Apache License, Version 2.0.
+Licensed under the [Apache License, Version 2.0](LICENSE).

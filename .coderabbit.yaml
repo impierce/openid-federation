@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration: https://docs.coderabbit.ai/reference/configuration
+reviews:
+  path_filters:
+    # Lock files are generated.
+    - "!**/*.lock"
+    # Fuzz seeds are specification examples and generated inputs, not code to review.
+    - "!fuzz/seeds/**"
+    - "!fuzz/corpus/**"
