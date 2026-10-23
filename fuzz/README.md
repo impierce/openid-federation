@@ -73,6 +73,7 @@ A crash is a bug in the library, or a property the target states too strongly; t
 
 - A bug: fix it in `src/`, add the input's behaviour as a regular test from the specification section it violates, keep the target's assertion.
 - A wrong assumption in the target (a value that legitimately does not round-trip byte for byte): narrow the assertion and say why in a comment.
+  Two such cases are already handled: `entity_id` asserts the round trip only for valid Entity Identifiers, because `url` does not round-trip every URL it parses, and the fuzz crate enables `serde_json`'s `float_roundtrip` feature, because without it a long numeric literal in an unknown claim changes on the second parse.
 
 ## Adding a target or a seed
 

@@ -14,7 +14,12 @@ jsonwebtoken = "9.0"
 libfuzzer-sys = "0.4"
 openid-federation = { path = ".." }
 serde = "1.0"
-serde_json = "1.0"
+# `float_roundtrip`: the targets assert that whatever parses survives a round trip through JSON.
+# Without it, `serde_json` parses floats with a fast algorithm that is not correctly rounded, so a
+# long numeric literal in an unknown claim can change on the second parse; a property of
+# `serde_json`, not of this crate. Cargo unifies the feature into the library's `serde_json` for
+# the fuzz build only.
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 url = "2.4"
 
 # Every binary is a fuzz target; the Fuzz workflow discovers them from this manifest.
