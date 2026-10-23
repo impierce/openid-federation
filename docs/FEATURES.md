@@ -7,7 +7,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 
 | Status | Meaning                                       |
 | ------ | --------------------------------------------- |
-| ✅     | Implemented on `dev`, covered by tests        |
+| ✅     | Implemented on `main`, covered by tests        |
 | 🚧     | In progress                                   |
 | 📋     | Planned                                       |
 

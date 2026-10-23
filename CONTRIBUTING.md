@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing to `openid-federation`!
 
-The default branch is `dev`. Pull requests target it.
+The default branch is `main`. Pull requests target it.
 
 ## Prerequisites
 
@@ -50,7 +50,7 @@ fuzz/run.sh entity_statement 600      # one target, ten minutes
 
 ## Pull requests
 
-Pull requests are squash-merged, so the **pull request title** becomes the commit message on `dev`.
+Pull requests are squash-merged, so the **pull request title** becomes the commit message on `main`.
 It must follow [Conventional Commits](https://www.conventionalcommits.org/), which CI checks:
 
 - `` feat: resolve metadata through the trust chain ``
