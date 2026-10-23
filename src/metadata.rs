@@ -9,9 +9,9 @@ use url::Url;
 /// Federation entity metadata as defined in the OpenID Federation specification.
 ///
 /// Reference: OpenID Federation 1.0 - Section 5.1.1 Federation Entity
-/// https://openid.net/specs/openid-federation-1_0.html#name-federation-entity and
+/// <https://openid.net/specs/openid-federation-1_0.html#name-federation-entity> and
 /// Section 5.2.2 Informational Metadata Parameters
-/// https://openid.net/specs/openid-federation-1_0.html#name-informational-metadata-para
+/// <https://openid.net/specs/openid-federation-1_0.html#name-informational-metadata-para>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FederationEntityMetadata {
     /// Organization name
@@ -61,7 +61,7 @@ pub struct FederationEntityMetadata {
 /// OpenID Connect Provider metadata.
 ///
 /// Reference: OpenID Federation 1.0 - Section 5.2 OpenID Provider Metadata
-/// https://openid.net/specs/openid-federation-1_0.html#name-openid-provider-metadata
+/// <https://openid.net/specs/openid-federation-1_0.html#name-openid-provider-metadata>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenIdConnectProviderMetadata {
     /// Issuer identifier
@@ -180,7 +180,7 @@ pub struct OpenIdConnectProviderMetadata {
 /// OpenID Connect Relying Party metadata.
 ///
 /// Reference: OpenID Federation 1.0 - Section 5.3 Relying Party Metadata
-/// https://openid.net/specs/openid-federation-1_0.html#name-relying-party-metadata
+/// <https://openid.net/specs/openid-federation-1_0.html#name-relying-party-metadata>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenIdConnectRelyingPartyMetadata {
     /// Redirect URIs
@@ -277,7 +277,7 @@ pub struct OpenIdConnectRelyingPartyMetadata {
 /// OAuth Authorization Server metadata.
 ///
 /// Reference: OpenID Federation 1.0 - Section 5.4 OAuth Authorization Server Metadata
-/// https://openid.net/specs/openid-federation-1_0.html#name-oauth-authorization-server-
+/// <https://openid.net/specs/openid-federation-1_0.html#name-oauth-authorization-server->
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OauthAuthorizationServerMetadata {
     /// Issuer identifier

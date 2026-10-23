@@ -9,7 +9,7 @@ use url::Url;
 /// Entity identifier - a URL that uniquely identifies an entity in the federation.
 ///
 /// Reference: OpenID Federation 1.0 - Section 2.1 Entity Identifier
-/// https://openid.net/specs/openid-federation-1_0.html#name-entity-identifier
+/// <https://openid.net/specs/openid-federation-1_0.html#name-entity-identifier>
 pub type EntityId = Url;
 
 /// JSON Web Key Set as defined in RFC 7517.
@@ -23,7 +23,7 @@ pub type Metadata = HashMap<String, serde_json::Value>;
 /// Entity types as defined in the OpenID Federation specification.
 ///
 /// Reference: OpenID Federation 1.0 - Section 2.2 Entity Types
-/// https://openid.net/specs/openid-federation-1_0.html#name-entity-types
+/// <https://openid.net/specs/openid-federation-1_0.html#name-entity-types>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntityType {
@@ -45,7 +45,7 @@ pub enum EntityType {
 /// type identifier next to the signed Trust Mark JWT, whose claims are [`TrustMark`].
 ///
 /// Reference: OpenID Federation 1.0 - Section 3.1.2 Claims that MUST or MAY Appear in an Entity Configuration
-/// https://openid.net/specs/openid-federation-1_0.html#name-claims-that-must-or-may-app
+/// <https://openid.net/specs/openid-federation-1_0.html#name-claims-that-must-or-may-app>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrustMarkEntry {
     /// MUST equal the `trust_mark_type` claim of the Trust Mark JWT in `trust_mark`.
@@ -64,7 +64,7 @@ impl TrustMarkEntry {
     /// well-formed entry.
     ///
     /// Reference: OpenID Federation 1.0 - Section 3.2 Entity Statement Validation
-    /// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-validation
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-validation>
     pub fn validate(&self) -> FederationResult<()> {
         let invalid = |reason: &str| {
             FederationError::InvalidSubordinateStatement(format!(
@@ -97,7 +97,7 @@ impl TrustMarkEntry {
 /// Trust mark as defined in the OpenID Federation specification.
 ///
 /// Reference: OpenID Federation 1.0 - Section 6 Trust Marks
-/// https://openid.net/specs/openid-federation-1_0.html#name-trust-marks
+/// <https://openid.net/specs/openid-federation-1_0.html#name-trust-marks>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrustMark {
     // TODO: exp should be OPTIONAL
@@ -151,7 +151,7 @@ pub struct TrustMarkOwners {
 /// It's a struct, not an enum, to enable multiple operators to be used in combination as defined in the spec.
 ///
 /// Reference: OpenID Federation 1.0 - Section 7 Metadata Policy
-/// https://openid.net/specs/openid-federation-1_0.html#name-metadata-policy
+/// <https://openid.net/specs/openid-federation-1_0.html#name-metadata-policy>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PolicyOperators {
     /// Essential policy operators

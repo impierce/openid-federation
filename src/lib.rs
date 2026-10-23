@@ -407,7 +407,7 @@ mod tests {
     /// Integration test based on OpenID Federation 1.0 Appendix A.2: The LIGO Wiki Discovers leaf entity metadata
     ///
     /// Reference: OpenID Federation 1.0 - Appendix A.2 The LIGO Wiki Discovers leaf entity metadata
-    /// https://openid.net/specs/openid-federation-1_0.html#name-the-ligo-wiki-discovers-the
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-the-ligo-wiki-discovers-the>
     #[tokio::test]
     async fn test_ligo_wiki_discovers_leaf_metadata() {
         use crate::FederationClient;
@@ -525,7 +525,7 @@ mod tests {
     /// Integration test based on OpenID Federation 1.0 Appendix A.3: Examples of the Two Ways of Doing Client Registration
     ///
     /// Reference: OpenID Federation 1.0 - Appendix A.3 Examples of the Two Ways of Doing Client Registration
-    /// https://openid.net/specs/openid-federation-1_0.html#appendix-A.3
+    /// <https://openid.net/specs/openid-federation-1_0.html#appendix-A.3>
     #[tokio::test]
     async fn test_client_registration_examples() {
         use crate::FederationClient;
@@ -1186,11 +1186,6 @@ mod tests {
         // Perform discovery
         let client = FederationClient::new();
         let leaf_entity_id = leaf_url.clone();
-
-        println!(
-            "leaf_url: {}, intermediate_url: {}, anchor_url: {}",
-            leaf_url, intermediate_url, anchor_url
-        );
 
         let result = client.discover_trust_chain(&leaf_entity_id, Some(&[anchor_url])).await;
 

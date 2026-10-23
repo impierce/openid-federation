@@ -80,7 +80,7 @@ impl JwtArtifactType {
 /// JWT Header with federation-specific extensions.
 ///
 /// Reference: OpenID Federation 1.0 - Section 3.1.3 Entity Statement Format
-/// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-format
+/// <https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-format>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FederationJwtHeader {
     // TODO: I think the KID and TYP fields are not optional
@@ -96,7 +96,7 @@ pub struct FederationJwtHeader {
 /// Standard JWT claims for OpenID Federation.
 ///
 /// Reference: OpenID Federation 1.0 - Section 3.1.4 Entity Statement Claims
-/// https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-claims
+/// <https://openid.net/specs/openid-federation-1_0.html#name-entity-statement-claims>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JwtClaims {
     /// Issuer
@@ -134,7 +134,7 @@ pub struct JwtClaims {
 /// Read through [`serde_json::Number`], which also understands how numbers are buffered inside
 /// `#[serde(flatten)]` when `serde_json`'s `arbitrary_precision` feature is enabled.
 ///
-/// Reference: https://www.rfc-editor.org/rfc/rfc7519#section-2
+/// Reference: <https://www.rfc-editor.org/rfc/rfc7519#section-2>
 mod numeric_date {
     use serde::{de, Deserialize, Deserializer};
 

@@ -123,7 +123,7 @@ impl FederationClient {
     /// Fetch an entity configuration from the well-known endpoint.
     ///
     /// Reference: OpenID Federation 1.0 - Section 9 Obtaining Federation Entity Configuration Information
-    /// https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity-
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity->
     pub async fn fetch_entity_configuration(&self, entity_id: &EntityId) -> FederationResult<String> {
         let well_known_url = self.build_well_known_url(entity_id)?;
         self.http_client.fetch_text(well_known_url).await
@@ -172,7 +172,7 @@ impl FederationClient {
     /// Fetch an subordinate statement from a federation fetch endpoint.
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
-    /// https://openid.net/specs/openid-federation-1_0.html#name-fetching-a-subordinate-sta
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-fetching-a-subordinate-sta>
     pub async fn fetch_subordinate_statement(
         &self,
         federation_fetch_endpoint: &Url,
@@ -208,7 +208,7 @@ impl FederationClient {
     /// - Loop detection identifies a cycle
     ///
     /// Reference: OpenID Federation 1.0 - Section 10.1
-    /// https://openid.net/specs/openid-federation-1_0.html#name-fetching-entity-statement
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-fetching-entity-statement>
     pub async fn discover_trust_chain(
         &self,
         start_entity_id: &EntityId,
@@ -548,7 +548,7 @@ impl FederationClient {
     /// List entities from a federation list endpoint.
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.3 Federation List Endpoint
-    /// https://openid.net/specs/openid-federation-1_0.html#name-federation-list-endpoint
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-federation-list-endpoint>
     pub async fn list_entities(&self, list_endpoint: &Url) -> FederationResult<Vec<EntityId>> {
         let response_text = self.http_client.fetch_text(list_endpoint.clone()).await?;
         let entity_list: Vec<String> = serde_json::from_str(&response_text)?;
@@ -562,7 +562,7 @@ impl FederationClient {
     /// any path and without a trailing `/`, followed by `/.well-known/openid-federation`.
     ///
     /// Reference: OpenID Federation 1.0 - Section 9 Obtaining Federation Entity Configuration Information
-    /// https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity-
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity->
     fn build_well_known_url(&self, entity_id: &EntityId) -> FederationResult<Url> {
         let mut url = entity_id.clone();
         url.set_query(None);
@@ -586,7 +586,7 @@ impl UrlValidator {
     /// Validate that a URL is suitable for use as an entity identifier.
     ///
     /// Reference: OpenID Federation 1.0 - Section 2.1 Entity Identifier
-    /// https://openid.net/specs/openid-federation-1_0.html#name-entity-identifier
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-entity-identifier>
     pub fn validate_entity_id(url: &Url) -> FederationResult<()> {
         // Entity ID must use HTTPS
         if url.scheme() != "https" {
