@@ -1,0 +1,16 @@
+{
+  "https://accreditation.example/trust-marks/member": {
+    "sub": "https://owner.example",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "use": "sig",
+          "alg": "HS256",
+          "kid": "test-key-1",
+          "k": "dGVzdF9zZWNyZXRfa2V5"
+        }
+      ]
+    }
+  }
+}

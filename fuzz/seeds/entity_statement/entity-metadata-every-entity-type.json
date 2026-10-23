@@ -1,0 +1,14 @@
+{
+  "federation_entity": {
+    "organization_name": "Example"
+  },
+  "oauth_resource": {
+    "resource": "https://rs.example"
+  },
+  "oauth_client": {
+    "client_name": "Example"
+  },
+  "custom_extension": {
+    "a": 1
+  }
+}

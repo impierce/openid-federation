@@ -1,0 +1,48 @@
+{
+  "iss": "https://op.umu.se",
+  "sub": "https://op.umu.se",
+  "iat": 1700000000,
+  "exp": 1700003600,
+  "jwks": {
+    "keys": [
+      {
+        "kty": "oct",
+        "use": "sig",
+        "alg": "HS256",
+        "kid": "test-key-1",
+        "k": "dGVzdF9zZWNyZXRfa2V5"
+      }
+    ]
+  },
+  "authority_hints": [
+    "https://umu.se"
+  ],
+  "metadata": {
+    "federation_entity": {
+      "organization_name": "Ume\u00e5 University",
+      "federation_fetch_endpoint": "https://op.umu.se/fetch",
+      "federation_list_endpoint": "https://op.umu.se/list"
+    },
+    "openid_provider": {
+      "issuer": "https://op.umu.se",
+      "authorization_endpoint": "https://op.umu.se/authorize",
+      "token_endpoint": "https://op.umu.se/token",
+      "jwks_uri": "https://op.umu.se/jwks",
+      "response_types_supported": [
+        "code"
+      ],
+      "subject_types_supported": [
+        "pairwise"
+      ],
+      "id_token_signing_alg_values_supported": [
+        "ES256"
+      ]
+    }
+  },
+  "trust_marks": [
+    {
+      "trust_mark_type": "https://accreditation.example/trust-marks/member",
+      "trust_mark": "eyJhbGciOiJIUzI1NiIsInR5cCI6InRydXN0LW1hcmsrand0Iiwia2lkIjoidGVzdC1rZXktMSJ9.eyJpc3MiOiJodHRwczovL2FjY3JlZGl0YXRpb24uZXhhbXBsZSIsInN1YiI6Imh0dHBzOi8vb3AudW11LnNlIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjE3MDAwMDM2MDAsInRydXN0X21hcmtfdHlwZSI6Imh0dHBzOi8vYWNjcmVkaXRhdGlvbi5leGFtcGxlL3RydXN0LW1hcmtzL21lbWJlciJ9.mc3brSBPmQ5wJtABipLROHwmE7Qt5PJiIux9wQy6mM4"
+    }
+  ]
+}
