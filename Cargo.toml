@@ -17,7 +17,7 @@ all-features = true
 async-trait = "0.1"
 base64 = "0.21"
 chrono = { version = "0.4", features = ["serde"] }
-jsonwebtoken = "9.0"
+jsonwebtoken = "11.1"
 reqwest = { version = "0.13", default-features = false, features = [
     "json",
     "rustls",
