@@ -1,5 +1,12 @@
 # OpenID Federation
 
+[![QA](https://github.com/impierce/openid-federation/actions/workflows/qa.yml/badge.svg)](https://github.com/impierce/openid-federation/actions/workflows/qa.yml)
+[![Audit](https://github.com/impierce/openid-federation/actions/workflows/audit.yml/badge.svg)](https://github.com/impierce/openid-federation/actions/workflows/audit.yml)
+[![Coverage](https://codecov.io/gh/impierce/openid-federation/graph/badge.svg)](https://codecov.io/gh/impierce/openid-federation)
+[![crates.io](https://img.shields.io/crates/v/openid-federation.svg)](https://crates.io/crates/openid-federation)
+[![docs.rs](https://img.shields.io/docsrs/openid-federation)](https://docs.rs/openid-federation)
+[![License](https://img.shields.io/crates/l/openid-federation.svg)](https://github.com/impierce/openid-federation/blob/HEAD/LICENSE)
+
 A Rust implementation of the OpenID Federation 1.0 standard.
 
 This library provides comprehensive support for OpenID Federation, enabling the creation of trust relationships between OpenID Connect providers and relying parties through a federation of trust anchors.
