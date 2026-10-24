@@ -2,7 +2,7 @@
   "iss": "https://op.umu.se",
   "sub": "https://op.umu.se",
   "iat": 1700000000,
-  "exp": 1700003600,
+  "exp": 4102444800,
   "jwks": {
     "keys": [
       {

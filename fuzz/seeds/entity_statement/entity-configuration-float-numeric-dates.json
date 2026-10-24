@@ -2,7 +2,7 @@
   "iss": "https://entity.example/federation",
   "sub": "https://entity.example/federation",
   "iat": 1700000000.0,
-  "exp": 1700003600.4,
+  "exp": 4102444800.4,
   "nbf": 1699999999.5,
   "jwks": {
     "keys": [

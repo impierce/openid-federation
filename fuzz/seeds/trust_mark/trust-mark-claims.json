@@ -2,7 +2,7 @@
   "iss": "https://accreditation.example",
   "sub": "https://op.umu.se",
   "iat": 1700000000,
-  "exp": 1700003600,
+  "exp": 4102444800,
   "trust_mark_type": "https://accreditation.example/trust-marks/member",
   "logo_uri": "https://accreditation.example/logo.png",
   "ref": "https://accreditation.example/terms",
