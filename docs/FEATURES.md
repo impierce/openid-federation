@@ -22,7 +22,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | Required `typ` header per artifact (`entity-statement+jwt`, `trust-mark+jwt`, …)                      |   ✅   | [Entity Statement](https://openid.net/specs/openid-federation-1_0.html#entity-statement)             |       |
 | NumericDates as any JSON number, time checks with leeway done by the crate                           |   ✅   | [RFC 7519 §2](https://www.rfc-editor.org/rfc/rfc7519#section-2)                                                          |       |
 | `crit` and `metadata_policy_crit`: reject statements with unsupported critical claims                |   📋   | [Entity Statement Validation](https://openid.net/specs/openid-federation-1_0.html#ESValidation)     |       |
-| Require `kid` and `typ` in the JWT header                                                            |   📋   | [Entity Statement](https://openid.net/specs/openid-federation-1_0.html#entity-statement)             |       |
+| Require `kid` in the JWT header (`typ` is already required, see above)                               |   📋   | [Entity Statement](https://openid.net/specs/openid-federation-1_0.html#entity-statement)             |       |
 | Separate error variant for invalid Entity Configurations (`InvalidSubordinateStatement` today)       |   📋   |                                                                                                                          |       |
 
 ## Metadata
