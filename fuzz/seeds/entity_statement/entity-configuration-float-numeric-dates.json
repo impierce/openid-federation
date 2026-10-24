@@ -1,0 +1,18 @@
+{
+  "iss": "https://entity.example/federation",
+  "sub": "https://entity.example/federation",
+  "iat": 1700000000.0,
+  "exp": 1700003600.4,
+  "nbf": 1699999999.5,
+  "jwks": {
+    "keys": [
+      {
+        "kty": "oct",
+        "use": "sig",
+        "alg": "HS256",
+        "kid": "test-key-1",
+        "k": "dGVzdF9zZWNyZXRfa2V5"
+      }
+    ]
+  }
+}
