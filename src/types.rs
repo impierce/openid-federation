@@ -25,19 +25,24 @@ pub type Metadata = HashMap<String, serde_json::Value>;
 /// Reference: OpenID Federation 1.0 - Section 2.2 Entity Types
 /// <https://openid.net/specs/openid-federation-1_0.html#name-entity-types>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum EntityType {
-    /// Federation entity
+    /// Federation Entity
+    #[serde(rename = "federation_entity")]
     FederationEntity,
-    /// OpenID Connect Provider
-    OpenkConnectProvider,
-    /// OpenID Connect Relying Party
-    OpenkConnectRelyingParty,
+    /// OpenID Provider
+    #[serde(rename = "openid_provider")]
+    OpenIdProvider,
+    /// OpenID Relying Party
+    #[serde(rename = "openid_relying_party")]
+    OpenIdRelyingParty,
     /// OAuth Authorization Server
+    #[serde(rename = "oauth_authorization_server")]
     OauthAuthorizationServer,
     /// OAuth Protected Resource
-    OauthProtectedResource,
+    #[serde(rename = "oauth_resource")]
+    OauthResource,
     /// OAuth Client
+    #[serde(rename = "oauth_client")]
     OauthClient,
 }
 
@@ -189,4 +194,40 @@ pub struct Constraints {
     /// Allowed leaf entity types
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_leaf_entity_types: Option<Vec<EntityType>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reference: OpenID Federation 1.0 - Section 2.2 Entity Types
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-entity-types>
+    #[test]
+    fn entity_type_identifiers_follow_the_specification() {
+        let identifiers = [
+            (EntityType::FederationEntity, "federation_entity"),
+            (EntityType::OpenIdProvider, "openid_provider"),
+            (EntityType::OpenIdRelyingParty, "openid_relying_party"),
+            (EntityType::OauthAuthorizationServer, "oauth_authorization_server"),
+            (EntityType::OauthResource, "oauth_resource"),
+            (EntityType::OauthClient, "oauth_client"),
+        ];
+        for (entity_type, identifier) in identifiers {
+            let json = format!("\"{identifier}\"");
+            assert_eq!(serde_json::to_string(&entity_type).unwrap(), json);
+            assert_eq!(serde_json::from_str::<EntityType>(&json).unwrap(), entity_type);
+        }
+    }
+
+    #[test]
+    fn constraints_accept_the_specifications_leaf_entity_types() {
+        let constraints: Constraints = serde_json::from_str(
+            r#"{"max_path_length":2,"allowed_leaf_entity_types":["openid_provider","openid_relying_party"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            constraints.allowed_leaf_entity_types,
+            Some(vec![EntityType::OpenIdProvider, EntityType::OpenIdRelyingParty])
+        );
+    }
 }

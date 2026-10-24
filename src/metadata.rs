@@ -391,10 +391,10 @@ impl EntityMetadata {
     pub fn has_entity_type(&self, entity_type: &EntityType) -> bool {
         match entity_type {
             EntityType::FederationEntity => self.federation_entity.is_some(),
-            EntityType::OpenkConnectProvider => self.openid_provider.is_some(),
-            EntityType::OpenkConnectRelyingParty => self.openid_relying_party.is_some(),
+            EntityType::OpenIdProvider => self.openid_provider.is_some(),
+            EntityType::OpenIdRelyingParty => self.openid_relying_party.is_some(),
             EntityType::OauthAuthorizationServer => self.oauth_authorization_server.is_some(),
-            EntityType::OauthProtectedResource => self.oauth_resource.is_some(),
+            EntityType::OauthResource => self.oauth_resource.is_some(),
             EntityType::OauthClient => self.oauth_client.is_some(),
         }
     }
