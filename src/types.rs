@@ -182,7 +182,11 @@ pub struct PolicyOperators {
     pub value: Option<serde_json::Value>,
 }
 
-/// Federation entity configuration constraints.
+/// Constraints a Superior places on the Subordinates below it, carried in the `constraints` claim
+/// of a Subordinate Statement.
+///
+/// Reference: OpenID Federation 1.0 - Section 6.2 Constraints
+/// <https://openid.net/specs/openid-federation-1_0.html#chain_constraints>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Constraints {
     /// Maximum path length for trust chains
@@ -191,9 +195,13 @@ pub struct Constraints {
     /// Naming constraints
     #[serde(skip_serializing_if = "Option::is_none")]
     pub naming_constraints: Option<HashMap<String, serde_json::Value>>,
-    /// Allowed leaf entity types
+    /// The Entity Types acceptable for Subordinate Entities in a Trust Chain. Absent, any Entity
+    /// Type is allowed; `federation_entity` is always allowed and never listed.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2.3 Entity Type Constraints
+    /// <https://openid.net/specs/openid-federation-1_0.html#entity_type_constraints>
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_leaf_entity_types: Option<Vec<EntityType>>,
+    pub allowed_entity_types: Option<Vec<EntityType>>,
 }
 
 #[cfg(test)]
@@ -220,13 +228,13 @@ mod tests {
     }
 
     #[test]
-    fn constraints_accept_the_specifications_leaf_entity_types() {
+    fn constraints_accept_the_specifications_entity_types() {
         let constraints: Constraints = serde_json::from_str(
-            r#"{"max_path_length":2,"allowed_leaf_entity_types":["openid_provider","openid_relying_party"]}"#,
+            r#"{"max_path_length":2,"allowed_entity_types":["openid_provider","openid_relying_party"]}"#,
         )
         .unwrap();
         assert_eq!(
-            constraints.allowed_leaf_entity_types,
+            constraints.allowed_entity_types,
             Some(vec![EntityType::OpenIdProvider, EntityType::OpenIdRelyingParty])
         );
     }
