@@ -355,7 +355,7 @@ mod tests {
 
         // Initially no entity types
         assert!(!metadata.has_entity_type(&EntityType::FederationEntity));
-        assert!(!metadata.has_entity_type(&EntityType::OpenkConnectProvider));
+        assert!(!metadata.has_entity_type(&EntityType::OpenIdProvider));
 
         // Add federation entity metadata
         metadata.federation_entity = Some(FederationEntityMetadata {
@@ -376,7 +376,7 @@ mod tests {
         });
 
         assert!(metadata.has_entity_type(&EntityType::FederationEntity));
-        assert!(!metadata.has_entity_type(&EntityType::OpenkConnectProvider));
+        assert!(!metadata.has_entity_type(&EntityType::OpenIdProvider));
     }
 
     #[test]

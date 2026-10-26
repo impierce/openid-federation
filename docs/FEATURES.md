@@ -29,6 +29,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 
 | Feature                                                                                              | Status | Specification                                                                                                            | Issue |
 | ---------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------ | ----- |
+| `EntityType`: the six Entity Type Identifiers, spelled as the specification spells them               |   ✅   | [Entity Type Identifiers](https://openid.net/specs/openid-federation-1_0.html#entity_types)                         | #18   |
 | `federation_entity` metadata, including the informational parameters and every endpoint             |   ✅   | [Federation Entity](https://openid.net/specs/openid-federation-1_0.html#federation_entity)                         |       |
 | `openid_provider`, `openid_relying_party`, `oauth_authorization_server` as typed structs             |   ✅   | [Metadata](https://openid.net/specs/openid-federation-1_0.html#metadata)                                           |       |
 | `oauth_resource` and `oauth_client` as typed structs (untyped JSON objects today)                     |   📋   | [Metadata](https://openid.net/specs/openid-federation-1_0.html#metadata)                                           |       |
@@ -40,7 +41,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 
 | Feature                                                                                              | Status | Specification                                                                                                            | Issue |
 | ---------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------ | ----- |
-| `Constraints` as a data type (`max_path_length`, `naming_constraints`, `allowed_leaf_entity_types`)   |   ✅   | [Constraints](https://openid.net/specs/openid-federation-1_0.html#chain_constraints)                                     |       |
+| `Constraints` as a data type (`max_path_length`, `naming_constraints`, `allowed_entity_types`)        |   ✅   | [Constraints](https://openid.net/specs/openid-federation-1_0.html#chain_constraints)                                     |       |
 | Enforcing constraints during trust chain validation                                                  |   📋   | [Constraints](https://openid.net/specs/openid-federation-1_0.html#chain_constraints)                                     |       |
 
 ## Trust Marks
