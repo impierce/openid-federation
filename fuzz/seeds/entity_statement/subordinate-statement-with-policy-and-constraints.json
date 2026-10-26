@@ -31,7 +31,7 @@
   },
   "constraints": {
     "max_path_length": 2,
-    "allowed_leaf_entity_types": [
+    "allowed_entity_types": [
       "openid_provider",
       "openid_relying_party"
     ]
