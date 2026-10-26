@@ -10,7 +10,7 @@ license = "Apache-2.0"
 cargo-fuzz = true
 
 [dependencies]
-jsonwebtoken = "9.0"
+jsonwebtoken = "11.1"
 libfuzzer-sys = "0.4"
 openid-federation = { path = ".." }
 serde = "1.0"
@@ -20,7 +20,7 @@ serde = "1.0"
 # `serde_json`, not of this crate. Cargo unifies the feature into the library's `serde_json` for
 # the fuzz build only.
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
-url = "2.4"
+url = "2.5"
 
 # Every binary is a fuzz target; the Fuzz workflow discovers them from this manifest.
 
