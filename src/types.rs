@@ -20,10 +20,11 @@ pub type RawJwkSet = HashMap<String, serde_json::Value>;
 /// Generic metadata type for flexibility.
 pub type Metadata = HashMap<String, serde_json::Value>;
 
-/// Entity types as defined in the OpenID Federation specification.
+/// An Entity Type Identifier: the six the specification defines, or any other, since additional
+/// identifiers may be defined by other specifications and a statement that uses one is still valid.
 ///
-/// Reference: OpenID Federation 1.0 - Section 2.2 Entity Types
-/// <https://openid.net/specs/openid-federation-1_0.html#name-entity-types>
+/// Reference: OpenID Federation 1.0 - Section 5.1 Entity Type Identifiers
+/// <https://openid.net/specs/openid-federation-1_0.html#entity_types>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EntityType {
     /// Federation Entity
@@ -44,6 +45,9 @@ pub enum EntityType {
     /// OAuth Client
     #[serde(rename = "oauth_client")]
     OauthClient,
+    /// An Entity Type Identifier defined outside this specification, kept verbatim.
+    #[serde(untagged)]
+    Other(String),
 }
 
 /// A Trust Mark as an Entity Configuration carries it in its `trust_marks` claim: the Trust Mark
@@ -227,6 +231,19 @@ mod tests {
         }
     }
 
+    /// Reference: OpenID Federation 1.0 - Section 5.1 Entity Type Identifiers
+    /// <https://openid.net/specs/openid-federation-1_0.html#entity_types>
+    #[test]
+    fn entity_type_keeps_an_additional_identifier() {
+        let json = r#""https://wallet.example/entity-types/wallet_provider""#;
+        let entity_type: EntityType = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            entity_type,
+            EntityType::Other("https://wallet.example/entity-types/wallet_provider".to_string())
+        );
+        assert_eq!(serde_json::to_string(&entity_type).unwrap(), json);
+    }
+
     #[test]
     fn constraints_accept_the_specifications_entity_types() {
         let constraints: Constraints = serde_json::from_str(
@@ -236,6 +253,16 @@ mod tests {
         assert_eq!(
             constraints.allowed_entity_types,
             Some(vec![EntityType::OpenIdProvider, EntityType::OpenIdRelyingParty])
+        );
+
+        let constraints: Constraints =
+            serde_json::from_str(r#"{"allowed_entity_types":["openid_relying_party","wallet_provider"]}"#).unwrap();
+        assert_eq!(
+            constraints.allowed_entity_types,
+            Some(vec![
+                EntityType::OpenIdRelyingParty,
+                EntityType::Other("wallet_provider".to_string())
+            ])
         );
     }
 }
