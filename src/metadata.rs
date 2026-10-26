@@ -391,11 +391,12 @@ impl EntityMetadata {
     pub fn has_entity_type(&self, entity_type: &EntityType) -> bool {
         match entity_type {
             EntityType::FederationEntity => self.federation_entity.is_some(),
-            EntityType::OpenkConnectProvider => self.openid_provider.is_some(),
-            EntityType::OpenkConnectRelyingParty => self.openid_relying_party.is_some(),
+            EntityType::OpenIdProvider => self.openid_provider.is_some(),
+            EntityType::OpenIdRelyingParty => self.openid_relying_party.is_some(),
             EntityType::OauthAuthorizationServer => self.oauth_authorization_server.is_some(),
-            EntityType::OauthProtectedResource => self.oauth_resource.is_some(),
+            EntityType::OauthResource => self.oauth_resource.is_some(),
             EntityType::OauthClient => self.oauth_client.is_some(),
+            EntityType::Other(identifier) => self.extensions.contains_key(identifier),
         }
     }
 }
@@ -403,5 +404,55 @@ impl EntityMetadata {
 impl Default for EntityMetadata {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn has_entity_type_follows_the_metadata_members() {
+        let metadata: EntityMetadata = serde_json::from_value(serde_json::json!({
+            "federation_entity": {},
+            "openid_provider": {
+                "issuer": "https://op.example",
+                "authorization_endpoint": "https://op.example/authorize",
+                "jwks_uri": "https://op.example/jwks",
+                "response_types_supported": ["code"],
+                "subject_types_supported": ["pairwise"],
+                "id_token_signing_alg_values_supported": ["ES256"]
+            },
+            "openid_relying_party": { "redirect_uris": ["https://rp.example/callback"] },
+            "oauth_authorization_server": { "issuer": "https://as.example" },
+            "oauth_resource": {},
+            "oauth_client": {},
+            "wallet_provider": {}
+        }))
+        .unwrap();
+        for entity_type in [
+            EntityType::FederationEntity,
+            EntityType::OpenIdProvider,
+            EntityType::OpenIdRelyingParty,
+            EntityType::OauthAuthorizationServer,
+            EntityType::OauthResource,
+            EntityType::OauthClient,
+            EntityType::Other("wallet_provider".to_string()),
+        ] {
+            assert!(metadata.has_entity_type(&entity_type), "{entity_type:?}");
+        }
+
+        let empty = EntityMetadata::new();
+        for entity_type in [
+            EntityType::FederationEntity,
+            EntityType::OpenIdProvider,
+            EntityType::OpenIdRelyingParty,
+            EntityType::OauthAuthorizationServer,
+            EntityType::OauthResource,
+            EntityType::OauthClient,
+            EntityType::Other("wallet_provider".to_string()),
+        ] {
+            assert!(!empty.has_entity_type(&entity_type), "{entity_type:?}");
+        }
     }
 }

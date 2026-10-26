@@ -1,5 +1,12 @@
 # OpenID Federation
 
+[![QA](https://github.com/impierce/openid-federation/actions/workflows/qa.yml/badge.svg)](https://github.com/impierce/openid-federation/actions/workflows/qa.yml)
+[![Audit](https://github.com/impierce/openid-federation/actions/workflows/audit.yml/badge.svg)](https://github.com/impierce/openid-federation/actions/workflows/audit.yml)
+[![Coverage](https://codecov.io/gh/impierce/openid-federation/graph/badge.svg)](https://codecov.io/gh/impierce/openid-federation)
+[![crates.io](https://img.shields.io/crates/v/openid-federation.svg)](https://crates.io/crates/openid-federation)
+[![docs.rs](https://img.shields.io/docsrs/openid-federation)](https://docs.rs/openid-federation)
+[![License](https://img.shields.io/crates/l/openid-federation.svg)](https://github.com/impierce/openid-federation/blob/HEAD/LICENSE)
+
 A Rust implementation of the OpenID Federation 1.0 standard.
 
 This library provides comprehensive support for OpenID Federation, enabling the creation of trust relationships between OpenID Connect providers and relying parties through a federation of trust anchors.
@@ -116,6 +123,11 @@ The library is organized into several key modules:
 - `utils`: Utility functions for HTTP, validation, and time handling
 - `error`: Comprehensive error types
 
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the checks CI runs and the pull request conventions, [`docs/DESIGN.md`](docs/DESIGN.md) for the architecture and trust model, and [`docs/FEATURES.md`](docs/FEATURES.md) for what is implemented and what is planned.
+Please report vulnerabilities privately, as described in [`SECURITY.md`](SECURITY.md).
+
 ## License
 
-Licensed under the Apache License, Version 2.0.
+Licensed under the [Apache License, Version 2.0](LICENSE).
