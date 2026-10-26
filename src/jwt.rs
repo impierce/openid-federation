@@ -217,10 +217,12 @@ pub struct JwtProcessor {
 impl JwtProcessor {
     /// Create a new JWT processor with default validation settings.
     pub fn new() -> Self {
-        let mut validation = Validation::default();
-        validation.validate_exp = true;
-        validation.validate_nbf = true;
-        validation.leeway = 60; // 60 seconds leeway for clock skew
+        let validation = Validation {
+            validate_exp: true,
+            validate_nbf: true,
+            leeway: 60, // 60 seconds leeway for clock skew
+            ..Validation::default()
+        };
 
         Self { validation }
     }
@@ -347,15 +349,9 @@ impl JwtProcessor {
 
 /// Extract claims from a JWT without verification (for inspection purposes only).
 pub fn extract_claims_unverified<T: for<'de> Deserialize<'de>>(token: &str) -> FederationResult<T> {
-    let mut validation = Validation::default();
-    validation.insecure_disable_signature_validation();
-    validation.validate_exp = false;
-    validation.validate_nbf = false;
-    // Nothing is validated here, and `jsonwebtoken` misreads a non-integer `exp` as missing when
-    // `serde_json`'s `arbitrary_precision` feature is enabled; `T` requires the claims it needs.
-    validation.required_spec_claims.clear();
-
-    decode::<T>(token, &DecodingKey::from_secret(&[]), &validation)
+    // Nothing is validated here, not even the `exp` and `nbf` claims; `T` requires the claims it
+    // needs. The header is still parsed, so a token that is not a JWT is rejected.
+    jsonwebtoken::dangerous::insecure_decode::<T>(token)
         .map(|token_data| token_data.claims)
         .map_err(FederationError::from)
 }
