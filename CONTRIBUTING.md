@@ -12,6 +12,7 @@ The default branch is `main`. Pull requests target it.
   The policy is a rolling six months: the MSRV may be raised to any stable release that is at least six months old.
   Raise it in its own pull request, together with the dependency updates it unlocks, and mark the pull request as a breaking change (`build!:`), since a crate built on an older toolchain stops compiling.
 - [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) to run the dependency checks locally: `cargo install --locked cargo-deny`.
+- [`cargo-semver-checks`](https://github.com/obi1kenobi/cargo-semver-checks) to check the public API for breaking changes: `cargo install --locked cargo-semver-checks`.
 
 ## Checks
 
@@ -24,6 +25,7 @@ cargo test --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --locked
 cargo publish --dry-run --locked
 cargo deny check
+cargo semver-checks --package openid-federation --all-features --baseline-rev main
 ```
 
 The tests run on Linux, macOS and Windows. HTTP is exercised against [`wiremock`](https://docs.rs/wiremock) servers on `localhost`; nothing in the test suite reaches the network.
@@ -61,10 +63,14 @@ The title also determines the next version number and the changelog entry, so de
 Write it in terse commit style: drop articles (_the_, _a_, _an_) and wrap code literals in backticks, as in `` fix(entity): reject Trust Mark entries whose type differs from JWT claim ``.
 Write `feat: add description to file`, not `feat: add a description to the file`.
 
+A change that breaks the public API needs `!` in the title (`feat!:`, `fix!:`): before 1.0 it bumps the minor version, and the changelog lists it as breaking.
+CI's `SemVer` job runs [`cargo-semver-checks`](https://github.com/obi1kenobi/cargo-semver-checks) on the public API, with all features, against the pull request's base, unless the title already has the `!`, and fails when it finds a breaking change.
+After adding the `!`, re-run that job: it reads the current title, but editing the title doesn't start it.
+
 ## Releases
 
 Releases are automated with [release-plz](https://release-plz.dev/): it keeps a release pull request open with the next version and changelog, and publishes to crates.io once that pull request is merged.
-Don't bump the version or edit `CHANGELOG.md` by hand.
+Don't bump the version or edit `CHANGELOG.md` outside that release pull request.
 [`docs/RELEASE.md`](docs/RELEASE.md) describes the full process.
 
 ## Feature checklist

@@ -116,12 +116,53 @@ jobs:
       - run: cargo publish --dry-run --locked
 
   # Single required check for branch protection.
+  # The public API against the pull request's base: a breaking change needs `!` in the title,
+  # since the title decides the next version. Comparing against the base rather than the last
+  # release keeps a breaking change already on `main` from failing every later pull request.
+  semver:
+    name: SemVer
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # A title that declares the break has nothing to check. The title as it is now, not as the
+      # event recorded it, so that re-running this job after editing the title sees the edit.
+      - id: title
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          title=$(gh api "repos/$REPO/pulls/$PR" --jq .title)
+          if [[ "$title" =~ ^[a-z]+(\([^\)]*\))?!: ]]; then
+            echo "::notice::The title declares a breaking change, so the public API is not checked."
+            echo "breaking=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.title.outputs.breaking != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # `baseline-rev` builds the base commit from the local history.
+          fetch-depth: 0
+      - id: check
+        if: steps.title.outputs.breaking != 'true'
+        uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
+        with:
+          package: openid-federation
+          feature-group: all-features
+          baseline-rev: ${{ github.event.pull_request.base.sha }}
+      - if: failure() && steps.check.outcome == 'failure'
+        run: echo "::error::If cargo-semver-checks reports a breaking change (see the step above), mark the title as breaking (\`feat!:\`, \`fix!:\`, ...), then re-run this job."
+
   qa:
     name: QA
     if: always()
-    needs: [fmt, clippy, test, docs, msrv, publish]
+    needs: [fmt, clippy, test, docs, msrv, publish, semver]
     runs-on: ubuntu-latest
     steps:
+      # `semver` runs on pull requests only.
       - env:
           NEEDS: ${{ toJson(needs) }}
-        run: echo "$NEEDS" | jq --exit-status 'all(.[]; .result == "success")'
+        run: echo "$NEEDS" | jq --exit-status 'to_entries | all(.value.result == "success" or (.key == "semver" and .value.result == "skipped"))'
