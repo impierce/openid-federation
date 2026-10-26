@@ -1,0 +1,43 @@
+{
+  "iss": "https://swamid.se",
+  "sub": "https://swamid.se",
+  "iat": 1700000000,
+  "exp": 4102444800,
+  "jwks": {
+    "keys": [
+      {
+        "kty": "oct",
+        "use": "sig",
+        "alg": "HS256",
+        "kid": "test-key-1",
+        "k": "dGVzdF9zZWNyZXRfa2V5"
+      }
+    ]
+  },
+  "metadata": {
+    "federation_entity": {
+      "federation_fetch_endpoint": "https://swamid.se/fetch"
+    }
+  },
+  "trust_mark_issuers": {
+    "https://accreditation.example/trust-marks/member": [
+      "https://accreditation.example"
+    ]
+  },
+  "trust_mark_owners": {
+    "https://accreditation.example/trust-marks/member": {
+      "sub": "https://owner.example",
+      "jwks": {
+        "keys": [
+          {
+            "kty": "oct",
+            "use": "sig",
+            "alg": "HS256",
+            "kid": "test-key-1",
+            "k": "dGVzdF9zZWNyZXRfa2V5"
+          }
+        ]
+      }
+    }
+  }
+}
