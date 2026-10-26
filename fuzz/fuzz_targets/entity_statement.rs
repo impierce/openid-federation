@@ -32,13 +32,17 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(metadata) = serde_json::from_slice::<EntityMetadata>(data) {
         for entity_type in [
             EntityType::FederationEntity,
-            EntityType::OpenkConnectProvider,
-            EntityType::OpenkConnectRelyingParty,
+            EntityType::OpenIdProvider,
+            EntityType::OpenIdRelyingParty,
             EntityType::OauthAuthorizationServer,
-            EntityType::OauthProtectedResource,
+            EntityType::OauthResource,
             EntityType::OauthClient,
         ] {
             let _ = metadata.has_entity_type(&entity_type);
+        }
+        // Every extension member is an additional Entity Type the metadata has.
+        for identifier in metadata.extensions.keys() {
+            assert!(metadata.has_entity_type(&EntityType::Other(identifier.clone())));
         }
         roundtrip(&metadata);
     }
