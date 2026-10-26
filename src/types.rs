@@ -20,25 +20,34 @@ pub type RawJwkSet = HashMap<String, serde_json::Value>;
 /// Generic metadata type for flexibility.
 pub type Metadata = HashMap<String, serde_json::Value>;
 
-/// Entity types as defined in the OpenID Federation specification.
+/// An Entity Type Identifier: the six the specification defines, or any other, since additional
+/// identifiers may be defined by other specifications and a statement that uses one is still valid.
 ///
-/// Reference: OpenID Federation 1.0 - Section 2.2 Entity Types
-/// <https://openid.net/specs/openid-federation-1_0.html#name-entity-types>
+/// Reference: OpenID Federation 1.0 - Section 5.1 Entity Type Identifiers
+/// <https://openid.net/specs/openid-federation-1_0.html#entity_types>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum EntityType {
-    /// Federation entity
+    /// Federation Entity
+    #[serde(rename = "federation_entity")]
     FederationEntity,
-    /// OpenID Connect Provider
-    OpenkConnectProvider,
-    /// OpenID Connect Relying Party
-    OpenkConnectRelyingParty,
+    /// OpenID Provider
+    #[serde(rename = "openid_provider")]
+    OpenIdProvider,
+    /// OpenID Relying Party
+    #[serde(rename = "openid_relying_party")]
+    OpenIdRelyingParty,
     /// OAuth Authorization Server
+    #[serde(rename = "oauth_authorization_server")]
     OauthAuthorizationServer,
     /// OAuth Protected Resource
-    OauthProtectedResource,
+    #[serde(rename = "oauth_resource")]
+    OauthResource,
     /// OAuth Client
+    #[serde(rename = "oauth_client")]
     OauthClient,
+    /// An Entity Type Identifier defined outside this specification, kept verbatim.
+    #[serde(untagged)]
+    Other(String),
 }
 
 /// A Trust Mark as an Entity Configuration carries it in its `trust_marks` claim: the Trust Mark
@@ -177,7 +186,11 @@ pub struct PolicyOperators {
     pub value: Option<serde_json::Value>,
 }
 
-/// Federation entity configuration constraints.
+/// Constraints a Superior places on the Subordinates below it, carried in the `constraints` claim
+/// of a Subordinate Statement.
+///
+/// Reference: OpenID Federation 1.0 - Section 6.2 Constraints
+/// <https://openid.net/specs/openid-federation-1_0.html#chain_constraints>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Constraints {
     /// Maximum path length for trust chains
@@ -186,7 +199,70 @@ pub struct Constraints {
     /// Naming constraints
     #[serde(skip_serializing_if = "Option::is_none")]
     pub naming_constraints: Option<HashMap<String, serde_json::Value>>,
-    /// Allowed leaf entity types
+    /// The Entity Types acceptable for Subordinate Entities in a Trust Chain. Absent, any Entity
+    /// Type is allowed; `federation_entity` is always allowed and never listed.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2.3 Entity Type Constraints
+    /// <https://openid.net/specs/openid-federation-1_0.html#entity_type_constraints>
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_leaf_entity_types: Option<Vec<EntityType>>,
+    pub allowed_entity_types: Option<Vec<EntityType>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reference: OpenID Federation 1.0 - Section 2.2 Entity Types
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-entity-types>
+    #[test]
+    fn entity_type_identifiers_follow_the_specification() {
+        let identifiers = [
+            (EntityType::FederationEntity, "federation_entity"),
+            (EntityType::OpenIdProvider, "openid_provider"),
+            (EntityType::OpenIdRelyingParty, "openid_relying_party"),
+            (EntityType::OauthAuthorizationServer, "oauth_authorization_server"),
+            (EntityType::OauthResource, "oauth_resource"),
+            (EntityType::OauthClient, "oauth_client"),
+        ];
+        for (entity_type, identifier) in identifiers {
+            let json = format!("\"{identifier}\"");
+            assert_eq!(serde_json::to_string(&entity_type).unwrap(), json);
+            assert_eq!(serde_json::from_str::<EntityType>(&json).unwrap(), entity_type);
+        }
+    }
+
+    /// Reference: OpenID Federation 1.0 - Section 5.1 Entity Type Identifiers
+    /// <https://openid.net/specs/openid-federation-1_0.html#entity_types>
+    #[test]
+    fn entity_type_keeps_an_additional_identifier() {
+        let json = r#""https://wallet.example/entity-types/wallet_provider""#;
+        let entity_type: EntityType = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            entity_type,
+            EntityType::Other("https://wallet.example/entity-types/wallet_provider".to_string())
+        );
+        assert_eq!(serde_json::to_string(&entity_type).unwrap(), json);
+    }
+
+    #[test]
+    fn constraints_accept_the_specifications_entity_types() {
+        let constraints: Constraints = serde_json::from_str(
+            r#"{"max_path_length":2,"allowed_entity_types":["openid_provider","openid_relying_party"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            constraints.allowed_entity_types,
+            Some(vec![EntityType::OpenIdProvider, EntityType::OpenIdRelyingParty])
+        );
+
+        let constraints: Constraints =
+            serde_json::from_str(r#"{"allowed_entity_types":["openid_relying_party","wallet_provider"]}"#).unwrap();
+        assert_eq!(
+            constraints.allowed_entity_types,
+            Some(vec![
+                EntityType::OpenIdRelyingParty,
+                EntityType::Other("wallet_provider".to_string())
+            ])
+        );
+    }
 }
