@@ -8,16 +8,16 @@
 `EntityId` was an alias for `url::Url`. Parsing normalizes a URL, for example
 `https://ta.example.org` becomes `https://ta.example.org/`, and the crate sent the normalized
 spelling to other entities. A fetch endpoint that compares the `sub` parameter as a string does not
-recognize it: the eduGAIN pilot Trust Anchor answers `sub=https://ta.poc2.dev.oidf.lab.surfconext.nl`
-with the Subordinate Statement and the normalized `…surfconext.nl/` with 404 (#22).
+recognize it: a Superior deployed in a live federation answers `sub=https://ta.example.org` with
+the Subordinate Statement and the normalized `sub=https://ta.example.org/` with 404 (#22).
 
 The specification defines an Entity Identifier as a URL and requires an `iss` to match the
 `authority_hints` value and the `sub` of the next statement, but does not say how to compare URLs.
-Live federations spell the same identifier both ways. The SURF PoC Trust Anchor publishes
-`https://ta.poc2.dev.oidf.lab.surfconext.nl`, while a member's `authority_hints` lists
-`https://ta.poc2.dev.oidf.lab.surfconext.nl/`. That Trust Anchor's Subordinate Statement about
-`https://auriga.dev2.impierce.com/` has `sub: https://auriga.dev2.impierce.com`. Comparing as plain
-strings would break these chains, although both spellings name the same resource.
+Live federations spell the same identifier both ways. A Trust Anchor publishes
+`https://ta.example.org`, while a member's `authority_hints` lists `https://ta.example.org/`. That
+Trust Anchor's Subordinate Statement about the member, which publishes `https://leaf.example.org/`,
+has `sub: https://leaf.example.org`. Comparing as plain strings would break these chains, although
+both spellings name the same resource.
 
 ## Decision
 
