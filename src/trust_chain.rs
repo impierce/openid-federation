@@ -313,8 +313,8 @@ mod tests {
     }
 
     fn build_entity_configuration(
-        entity_id: &Url,
-        authority_hints: Option<Vec<Url>>,
+        entity_id: &EntityId,
+        authority_hints: Option<Vec<EntityId>>,
         fetch_endpoint: Option<Url>,
     ) -> EntityConfiguration {
         let mut config = EntityConfiguration::new(
@@ -335,7 +335,7 @@ mod tests {
         config
     }
 
-    fn build_subordinate_statement(issuer: &Url, subject: &Url) -> SubordinateStatement {
+    fn build_subordinate_statement(issuer: &EntityId, subject: &EntityId) -> SubordinateStatement {
         SubordinateStatement::new(
             issuer.clone(),
             subject.clone(),
@@ -345,8 +345,8 @@ mod tests {
         )
     }
 
-    fn build_fetch_endpoint(entity_id: &Url) -> Url {
-        let mut endpoint = entity_id.clone();
+    fn build_fetch_endpoint(entity_id: &EntityId) -> Url {
+        let mut endpoint = entity_id.as_url().clone();
         endpoint.set_path("/federation_fetch_endpoint");
         endpoint.set_query(None);
         endpoint
@@ -390,7 +390,7 @@ mod tests {
             .await;
     }
 
-    async fn mock_subordinate_statement(server: &MockServer, subject: &Url, jwt: String) {
+    async fn mock_subordinate_statement(server: &MockServer, subject: &EntityId, jwt: String) {
         Mock::given(method("GET"))
             .and(path("/federation_fetch_endpoint"))
             .and(query_param("sub", subject.as_str()))
@@ -410,10 +410,10 @@ mod tests {
         let intermediate_two_server = MockServer::start().await;
         let trust_anchor_server = MockServer::start().await;
 
-        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
-        let intermediate_one_url = Url::parse(&format!("http://{}", intermediate_one_server.address())).unwrap();
-        let intermediate_two_url = Url::parse(&format!("http://{}", intermediate_two_server.address())).unwrap();
-        let trust_anchor_url = Url::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
+        let leaf_url = EntityId::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let intermediate_one_url = EntityId::parse(&format!("http://{}", intermediate_one_server.address())).unwrap();
+        let intermediate_two_url = EntityId::parse(&format!("http://{}", intermediate_two_server.address())).unwrap();
+        let trust_anchor_url = EntityId::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
 
         let leaf_fetch_endpoint = build_fetch_endpoint(&leaf_url);
         let intermediate_one_fetch_endpoint = build_fetch_endpoint(&intermediate_one_url);
@@ -515,8 +515,8 @@ mod tests {
         let leaf_server = MockServer::start().await;
         let trust_anchor_server = MockServer::start().await;
 
-        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
-        let trust_anchor_url = Url::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
+        let leaf_url = EntityId::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let trust_anchor_url = EntityId::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
 
         let leaf_config = build_entity_configuration(
             &leaf_url,
@@ -576,9 +576,9 @@ mod tests {
         let intermediate_server = MockServer::start().await;
         let trust_anchor_server = MockServer::start().await;
 
-        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
-        let intermediate_url = Url::parse(&format!("http://{}", intermediate_server.address())).unwrap();
-        let trust_anchor_url = Url::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
+        let leaf_url = EntityId::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let intermediate_url = EntityId::parse(&format!("http://{}", intermediate_server.address())).unwrap();
+        let trust_anchor_url = EntityId::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
 
         let leaf_config = build_entity_configuration(
             &leaf_url,
@@ -598,7 +598,7 @@ mod tests {
         mock_entity_configuration(&trust_anchor_server, encode_entity_configuration(&trust_anchor_config)).await;
 
         // Deliberately register a mismatching `sub` to prove the resolver must send the exact query.
-        let wrong_subject = Url::parse("https://wrong.example.test").unwrap();
+        let wrong_subject = EntityId::parse("https://wrong.example.test").unwrap();
         mock_subordinate_statement(
             &intermediate_server,
             &wrong_subject,
@@ -678,9 +678,9 @@ mod tests {
     }
 
     fn keyed_configuration(
-        entity_id: &Url,
+        entity_id: &EntityId,
         jwks: JwkSet,
-        authority_hints: Option<Vec<Url>>,
+        authority_hints: Option<Vec<EntityId>>,
         fetch_endpoint: Option<Url>,
     ) -> EntityConfiguration {
         let mut config = EntityConfiguration::new(
@@ -696,7 +696,7 @@ mod tests {
         config
     }
 
-    fn keyed_statement(issuer: &Url, subject: &Url, subject_keys: JwkSet) -> SubordinateStatement {
+    fn keyed_statement(issuer: &EntityId, subject: &EntityId, subject_keys: JwkSet) -> SubordinateStatement {
         SubordinateStatement::new(
             issuer.clone(),
             subject.clone(),
@@ -708,10 +708,10 @@ mod tests {
 
     /// A valid leaf -> intermediate -> anchor chain where every entity signs with its own key.
     /// Returns (leaf_jwt, intermediate_about_leaf_jwt, anchor_about_intermediate_jwt, anchor_jwt).
-    fn distinct_key_chain() -> (String, String, String, String, Url, Url, Url) {
-        let leaf_url = Url::parse("https://leaf.example.test").unwrap();
-        let intermediate_url = Url::parse("https://intermediate.example.test").unwrap();
-        let anchor_url = Url::parse("https://anchor.example.test").unwrap();
+    fn distinct_key_chain() -> (String, String, String, String, EntityId, EntityId, EntityId) {
+        let leaf_url = EntityId::parse("https://leaf.example.test").unwrap();
+        let intermediate_url = EntityId::parse("https://intermediate.example.test").unwrap();
+        let anchor_url = EntityId::parse("https://anchor.example.test").unwrap();
 
         let leaf_jwt = sign_with(
             &keyed_configuration(
@@ -768,8 +768,8 @@ mod tests {
 
     #[test]
     fn try_new_accepts_direct_leaf_to_anchor_chain_with_distinct_keys() {
-        let leaf_url = Url::parse("https://leaf.example.test").unwrap();
-        let anchor_url = Url::parse("https://anchor.example.test").unwrap();
+        let leaf_url = EntityId::parse("https://leaf.example.test").unwrap();
+        let anchor_url = EntityId::parse("https://anchor.example.test").unwrap();
 
         let leaf = sign_with(
             &keyed_configuration(
@@ -872,7 +872,7 @@ mod tests {
     #[test]
     fn try_new_rejects_subordinate_statement_from_unexpected_issuer() {
         let (leaf, intermediate_about_leaf, _, anchor, _, intermediate_url, _) = distinct_key_chain();
-        let other_url = Url::parse("https://other.example.test").unwrap();
+        let other_url = EntityId::parse("https://other.example.test").unwrap();
 
         // Signed with the anchor's key, but claims to be issued by someone else than the anchor.
         let wrong_issuer = sign_with(
@@ -900,10 +900,10 @@ mod tests {
         let leaf_server = MockServer::start().await;
         let superior_server = MockServer::start().await;
 
-        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
-        let superior_url = Url::parse(&format!("http://{}", superior_server.address())).unwrap();
+        let leaf_url = EntityId::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let superior_url = EntityId::parse(&format!("http://{}", superior_server.address())).unwrap();
         // The victim anchor is never contacted; only its identifier is claimed.
-        let victim_url = Url::parse("https://victim-anchor.example.test").unwrap();
+        let victim_url = EntityId::parse("https://victim-anchor.example.test").unwrap();
 
         let leaf_config = keyed_configuration(
             &leaf_url,
@@ -963,9 +963,9 @@ mod tests {
         let leaf_server = MockServer::start().await;
         let anchor_server = MockServer::start().await;
 
-        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
-        let anchor_url = Url::parse(&format!("http://{}", anchor_server.address())).unwrap();
-        let other_url = Url::parse("https://other-leaf.example.test").unwrap();
+        let leaf_url = EntityId::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let anchor_url = EntityId::parse(&format!("http://{}", anchor_server.address())).unwrap();
+        let other_url = EntityId::parse("https://other-leaf.example.test").unwrap();
 
         // Served from the leaf server, but claims to be `other`.
         let impostor_config = keyed_configuration(
@@ -1013,8 +1013,8 @@ mod tests {
         let leaf_server = MockServer::start().await;
         let anchor_server = MockServer::start().await;
 
-        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
-        let anchor_url = Url::parse(&format!("http://{}", anchor_server.address())).unwrap();
+        let leaf_url = EntityId::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let anchor_url = EntityId::parse(&format!("http://{}", anchor_server.address())).unwrap();
 
         let leaf_config = keyed_configuration(
             &leaf_url,
@@ -1062,9 +1062,9 @@ mod tests {
         let good_anchor_server = MockServer::start().await;
         let bad_anchor_server = MockServer::start().await;
 
-        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
-        let good_anchor_url = Url::parse(&format!("http://{}", good_anchor_server.address())).unwrap();
-        let bad_anchor_url = Url::parse(&format!("http://{}", bad_anchor_server.address())).unwrap();
+        let leaf_url = EntityId::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let good_anchor_url = EntityId::parse(&format!("http://{}", good_anchor_server.address())).unwrap();
+        let bad_anchor_url = EntityId::parse(&format!("http://{}", bad_anchor_server.address())).unwrap();
 
         let leaf_config = keyed_configuration(
             &leaf_url,
@@ -1139,9 +1139,9 @@ mod tests {
     /// about `leaf_url` endorsing `leaf_keys`.
     async fn mock_anchor_endorsing(
         server: &MockServer,
-        anchor_url: &Url,
+        anchor_url: &EntityId,
         secret: &str,
-        leaf_url: &Url,
+        leaf_url: &EntityId,
         leaf_keys: JwkSet,
     ) {
         let anchor_config = keyed_configuration(
@@ -1168,7 +1168,7 @@ mod tests {
         let no_statement_server = MockServer::start().await;
         let unendorsed_server = MockServer::start().await;
 
-        let url_of = |server: &MockServer| Url::parse(&format!("http://{}", server.address())).unwrap();
+        let url_of = |server: &MockServer| EntityId::parse(&format!("http://{}", server.address())).unwrap();
         let leaf_url = url_of(&leaf_server);
         let good_anchor_url = url_of(&good_anchor_server);
         let unreachable_url = url_of(&unreachable_server);
@@ -1253,7 +1253,7 @@ mod tests {
             good_anchor_url
         );
 
-        let failure_for = |entity_id: &Url| {
+        let failure_for = |entity_id: &EntityId| {
             let failures: Vec<_> = discovery
                 .failures
                 .iter()
@@ -1285,8 +1285,8 @@ mod tests {
         let leaf_server = MockServer::start().await;
         let unreachable_server = MockServer::start().await;
 
-        let leaf_url = Url::parse(&format!("http://{}", leaf_server.address())).unwrap();
-        let unreachable_url = Url::parse(&format!("http://{}", unreachable_server.address())).unwrap();
+        let leaf_url = EntityId::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let unreachable_url = EntityId::parse(&format!("http://{}", unreachable_server.address())).unwrap();
 
         let leaf_config = keyed_configuration(
             &leaf_url,
@@ -1315,11 +1315,53 @@ mod tests {
     #[tokio::test]
     async fn all_chains_discovery_with_failures_fails_for_unresolvable_start_entity() {
         let unreachable_server = MockServer::start().await;
-        let unreachable_url = Url::parse(&format!("http://{}", unreachable_server.address())).unwrap();
+        let unreachable_url = EntityId::parse(&format!("http://{}", unreachable_server.address())).unwrap();
 
         FederationClient::new()
             .discover_all_trust_chains_with_failures(&unreachable_url)
             .await
             .expect_err("the start entity must be resolvable");
+    }
+
+    /// A superior's fetch endpoint may compare `sub` as a string, so discovery asks about an entity
+    /// under the identifier the entity publishes, not under the spelling of the authority hint or
+    /// start identifier that led to it. The servers publish their identifiers without a trailing
+    /// `/`; the leaf's authority hint and the identifier discovery starts from carry one.
+    #[tokio::test]
+    async fn discovery_asks_superiors_about_the_identifier_the_entity_publishes() {
+        let leaf_server = MockServer::start().await;
+        let superior_server = MockServer::start().await;
+
+        let leaf_id = EntityId::parse(&format!("http://{}", leaf_server.address())).unwrap();
+        let superior_id = EntityId::parse(&format!("http://{}", superior_server.address())).unwrap();
+        let with_slash = |entity_id: &EntityId| EntityId::parse(&format!("{entity_id}/")).unwrap();
+
+        let leaf_config = build_entity_configuration(&leaf_id, Some(vec![with_slash(&superior_id)]), None);
+        mock_entity_configuration(&leaf_server, encode_entity_configuration(&leaf_config)).await;
+        let superior_config = build_entity_configuration(&superior_id, None, Some(build_fetch_endpoint(&superior_id)));
+        mock_entity_configuration(&superior_server, encode_entity_configuration(&superior_config)).await;
+        // Answers only `sub` spelled as the leaf publishes it.
+        mock_subordinate_statement(
+            &superior_server,
+            &leaf_id,
+            encode_entity_statement(&build_subordinate_statement(&superior_id, &leaf_id)),
+        )
+        .await;
+
+        let client = FederationClient::new();
+
+        let discovery = client
+            .discover_all_trust_chains_with_failures(&with_slash(&leaf_id))
+            .await
+            .expect("the leaf itself is resolvable");
+        assert!(discovery.failures.is_empty(), "failures: {:?}", discovery.failures);
+        assert_eq!(discovery.chains.len(), 1);
+        let (anchor_id, _) = discovery.chains[0].trust_anchor_entity_id_and_configuration().unwrap();
+        assert_eq!(anchor_id.as_str(), superior_id.as_str());
+
+        client
+            .discover_trust_chain(&with_slash(&leaf_id), Some(&[with_slash(&superior_id)]))
+            .await
+            .expect("anchored discovery asks about the published identifier too");
     }
 }

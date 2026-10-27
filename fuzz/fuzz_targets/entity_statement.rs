@@ -5,8 +5,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use openid_federation::{EntityConfiguration, EntityMetadata, EntityType, SubordinateStatement};
-use url::Url;
+use openid_federation::{EntityConfiguration, EntityId, EntityMetadata, EntityType, SubordinateStatement};
 
 fn roundtrip<T>(value: &T) -> T
 where
@@ -21,7 +20,7 @@ where
 fuzz_target!(|data: &[u8]| {
     if let Ok(configuration) = serde_json::from_slice::<EntityConfiguration>(data) {
         let _ = configuration.validate();
-        let subject = Url::parse("https://subject.example").expect("a fixed URL parses");
+        let subject = EntityId::parse("https://subject.example").expect("a fixed Entity Identifier parses");
         let _ = configuration.to_subordinate_statement(subject).validate();
         roundtrip(&configuration);
     }
