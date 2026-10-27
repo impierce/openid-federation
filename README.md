@@ -34,14 +34,14 @@ openid-federation = "0.1.0"
 
 ```rust
 use openid_federation::{
-    EntityConfiguration, SubordinateStatement, JwkSet, FederationEntityMetadata,
+    EntityConfiguration, EntityId, SubordinateStatement, JwkSet, FederationEntityMetadata,
     EntityMetadata, TrustChain
 };
 use chrono::{Duration, Utc};
 use url::Url;
 
 // Create an entity configuration
-let entity_id = Url::parse("https://example.com")?;
+let entity_id = EntityId::parse("https://example.com")?;
 let jwks = JwkSet::new();
 let exp = Utc::now() + Duration::hours(24);
 let iat = Utc::now();
@@ -70,16 +70,15 @@ let trust_chain = TrustChain::try_new(vec![
 ### HTTP Client Usage
 
 ```rust
-use openid_federation::{FederationClient, UrlValidator};
-use url::Url;
+use openid_federation::{EntityId, FederationClient, UrlValidator};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = FederationClient::new();
-    let entity_id = Url::parse("https://example.com")?;
+    let entity_id = EntityId::parse("https://example.com")?;
 
     // Validate entity ID
-    UrlValidator::validate_entity_id(&entity_id)?;
+    UrlValidator::validate_entity_id(entity_id.as_url())?;
 
     // Fetch entity configuration
     let config_jwt = client.fetch_entity_configuration(&entity_id).await?;
