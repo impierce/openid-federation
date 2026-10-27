@@ -2,15 +2,119 @@
 
 use crate::{jwt::JwtClaims, FederationError, FederationResult, JwkSet};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 use url::Url;
 
-/// Entity identifier - a URL that uniquely identifies an entity in the federation.
+/// Entity Identifier: a URL that uniquely identifies an entity in the federation.
 ///
-/// Reference: OpenID Federation 1.0 - Section 2.1 Entity Identifier
-/// <https://openid.net/specs/openid-federation-1_0.html#name-entity-identifier>
-pub type EntityId = Url;
+/// The identifier keeps the exact spelling it was parsed from. Parsing a URL normalizes it, for
+/// example `https://ta.example.org` becomes `https://ta.example.org/`, and a federation endpoint
+/// that compares an identifier as a string does not recognize the normalized spelling. So
+/// [`EntityId::as_str`], [`Display`](fmt::Display) and serialization return the spelling as
+/// published, which is what requests to other entities carry.
+///
+/// Two identifiers are equal when they are equivalent URLs, so `https://ta.example.org` and
+/// `https://ta.example.org/` are the same entity (RFC 3986, Section 6.2.3 Scheme-Based
+/// Normalization). Comparing them as plain strings would break trust chains between entities that
+/// spell the same identifier differently.
+///
+/// Reference: OpenID Federation 1.0 - Section 1.2 Terminology (Entity Identifier)
+/// <https://openid.net/specs/openid-federation-1_0.html#name-terminology>
+#[derive(Clone)]
+pub struct EntityId {
+    id: String,
+    url: Url,
+}
+
+impl EntityId {
+    /// Parse an Entity Identifier, keeping `id` as spelled.
+    ///
+    /// Only checks that `id` is a URL; [`UrlValidator::validate_entity_id`](crate::UrlValidator::validate_entity_id)
+    /// checks the rules the specification places on Entity Identifiers.
+    pub fn parse(id: &str) -> FederationResult<Self> {
+        Ok(Self {
+            id: id.to_string(),
+            url: Url::parse(id)?,
+        })
+    }
+
+    /// The identifier as spelled when it was parsed.
+    pub fn as_str(&self) -> &str {
+        &self.id
+    }
+
+    /// The identifier as a parsed, normalized URL, for building requests to the entity.
+    pub fn as_url(&self) -> &Url {
+        &self.url
+    }
+}
+
+impl PartialEq for EntityId {
+    fn eq(&self, other: &Self) -> bool {
+        self.url == other.url
+    }
+}
+
+impl Eq for EntityId {}
+
+impl Hash for EntityId {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.url.hash(state);
+    }
+}
+
+impl fmt::Debug for EntityId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("EntityId").field(&self.id).finish()
+    }
+}
+
+impl fmt::Display for EntityId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.id)
+    }
+}
+
+impl AsRef<str> for EntityId {
+    fn as_ref(&self) -> &str {
+        &self.id
+    }
+}
+
+impl FromStr for EntityId {
+    type Err = FederationError;
+
+    fn from_str(id: &str) -> FederationResult<Self> {
+        Self::parse(id)
+    }
+}
+
+/// Spells the identifier as `url` prints, which is its normalized form.
+impl From<Url> for EntityId {
+    fn from(url: Url) -> Self {
+        Self {
+            id: url.as_str().to_string(),
+            url,
+        }
+    }
+}
+
+impl Serialize for EntityId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.id)
+    }
+}
+
+impl<'de> Deserialize<'de> for EntityId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let id = String::deserialize(deserializer)?;
+        Self::parse(&id).map_err(serde::de::Error::custom)
+    }
+}
 
 /// JSON Web Key Set as defined in RFC 7517.
 /// Note: This is a type alias for the raw JWKS structure.
@@ -264,5 +368,47 @@ mod tests {
                 EntityType::Other("wallet_provider".to_string())
             ])
         );
+    }
+
+    #[test]
+    fn entity_id_keeps_the_spelling_it_was_parsed_from() {
+        for spelling in [
+            "https://ta.example.org",
+            "https://ta.example.org/",
+            "https://example.org/federation",
+        ] {
+            let entity_id = EntityId::parse(spelling).unwrap();
+
+            assert_eq!(entity_id.as_str(), spelling);
+            assert_eq!(entity_id.to_string(), spelling);
+            let json = serde_json::to_string(&entity_id).unwrap();
+            assert_eq!(json, format!("\"{spelling}\""));
+            assert_eq!(serde_json::from_str::<EntityId>(&json).unwrap().as_str(), spelling);
+        }
+    }
+
+    /// RFC 3986, Section 6.2.3: an empty path is equivalent to `/` for `https` URLs.
+    #[test]
+    fn entity_ids_that_are_equivalent_urls_are_equal() {
+        let without_slash = EntityId::parse("https://ta.example.org").unwrap();
+        let with_slash = EntityId::parse("https://ta.example.org/").unwrap();
+
+        assert_eq!(without_slash, with_slash);
+        assert!(std::collections::HashSet::from([without_slash]).contains(&with_slash));
+
+        assert_ne!(
+            EntityId::parse("https://example.org/federation").unwrap(),
+            EntityId::parse("https://example.org/federation/").unwrap()
+        );
+        assert_ne!(
+            EntityId::parse("https://example.org/a").unwrap(),
+            EntityId::parse("https://example.org/b").unwrap()
+        );
+    }
+
+    #[test]
+    fn entity_id_rejects_what_is_not_a_url() {
+        assert!(EntityId::parse("ta.example.org").is_err());
+        assert!(serde_json::from_str::<EntityId>("\"not a url\"").is_err());
     }
 }

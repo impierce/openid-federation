@@ -5,9 +5,9 @@
 
 use libfuzzer_sys::fuzz_target;
 use openid_federation::{
-    extract_claims_unverified, EntityConfiguration, JwtArtifactType, SubordinateStatement, TrustChain, TrustMark,
+    extract_claims_unverified, EntityConfiguration, EntityId, JwtArtifactType, SubordinateStatement, TrustChain,
+    TrustMark,
 };
-use url::Url;
 
 const ARTIFACT_TYPES: [JwtArtifactType; 7] = [
     JwtArtifactType::EntityStatement,
@@ -35,7 +35,7 @@ fuzz_target!(|data: &[u8]| {
     let _ = extract_claims_unverified::<SubordinateStatement>(input);
     let _ = extract_claims_unverified::<TrustMark>(input);
 
-    let entity = Url::parse("https://entity.example").expect("a fixed URL parses");
+    let entity = EntityId::parse("https://entity.example").expect("a fixed Entity Identifier parses");
     let _ = EntityConfiguration::from_verified_jwt(input, &entity);
 
     // One statement per line; a chain needs at least a leaf and an anchor.

@@ -15,7 +15,7 @@ One file per target in [`fuzz_targets/`](fuzz_targets/); the doc comment at the 
 | `jwt`              | `decode_header` and `typ` validation, `extract_claims_unverified`, `from_verified_jwt`, `TrustChain::try_new` over the input's lines | a compact JWT, or one JWT per line                 |
 | `trust_mark`       | `TrustMarkEntry::validate`; `TrustMark`, `TrustMarkIssuers`, `TrustMarkOwners` round trips                                           | a Trust Mark type on the first line, then the JWT; or JSON |
 | `jwk`              | `Jwk` and `JwkSet` JSON, conversion to `jsonwebtoken` keys, `kid` lookup, signature-key selection, round trip                        | a JWK or JWK Set as JSON                           |
-| `entity_id`        | `UrlValidator::validate_entity_id` and `validate_endpoint_url`; a valid Entity Identifier prints and re-parses to itself             | a URL                                              |
+| `entity_id`        | `UrlValidator::validate_entity_id` and `validate_endpoint_url`; a valid Entity Identifier prints and re-parses to itself; an `EntityId` keeps its spelling and equals the `EntityId` of its normalized URL | a URL |
 
 Nothing in the targets verifies a signature, since no key is known for arbitrary input: `from_verified_jwt` and `try_new` are exercised for the absence of panics, and a result is accepted either way.
 

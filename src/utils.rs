@@ -325,6 +325,9 @@ impl FederationClient {
             // Binds the fetched document to `entity_id`, so that a trusted anchor's entry in the
             // chain is really the configuration served by (and self-signed by) that anchor.
             let (config_jwt, config) = self.resolve_entity_configuration(entity_id).await?;
+            // Superiors are asked about the entity under the identifier it publishes, which may be
+            // spelled differently from `entity_id`, e.g. from an authority hint with a trailing `/`.
+            let subject_id = &config.claims.sub;
             let is_root = chain.is_empty();
             let is_trusted_anchor = trusted_anchors.contains(entity_id);
             if is_root || is_trusted_anchor {
@@ -372,7 +375,7 @@ impl FederationClient {
                     })?;
 
                 let (subordinate_jwt, _) = match self
-                    .resolve_subordinate_statement(superior_id, &superior_config.jwks, &fetch_endpoint, entity_id)
+                    .resolve_subordinate_statement(superior_id, &superior_config.jwks, &fetch_endpoint, subject_id)
                     .await
                 {
                     Ok(resolved) => resolved,
@@ -437,6 +440,9 @@ impl FederationClient {
                 // Binds the fetched document to `entity_id`; a terminal configuration that claims
                 // another entity's identity is rejected here instead of becoming a chain's anchor.
                 let (config_jwt, config) = self.resolve_entity_configuration(entity_id).await?;
+                // Superiors are asked about the entity under the identifier it publishes, which may be
+                // spelled differently from `entity_id`, e.g. from an authority hint with a trailing `/`.
+                let subject_id = &config.claims.sub;
                 let is_leaf = chain.is_empty();
                 // Remember if this step added its own config JWT to `chain`.
                 // If yes, this step must remove it before returning.
@@ -507,7 +513,7 @@ impl FederationClient {
                     };
 
                     let (subordinate_jwt, _) = match self
-                        .resolve_subordinate_statement(superior_id, &superior_config.jwks, &fetch_endpoint, entity_id)
+                        .resolve_subordinate_statement(superior_id, &superior_config.jwks, &fetch_endpoint, subject_id)
                         .await
                     {
                         Ok(resolved) => resolved,
@@ -554,7 +560,7 @@ impl FederationClient {
         let entity_list: Vec<String> = serde_json::from_str(&response_text)?;
         entity_list
             .into_iter()
-            .map(|url_str| Url::parse(&url_str).map_err(FederationError::from))
+            .map(|entity_id| EntityId::parse(&entity_id))
             .collect()
     }
 
@@ -564,7 +570,7 @@ impl FederationClient {
     /// Reference: OpenID Federation 1.0 - Section 9 Obtaining Federation Entity Configuration Information
     /// <https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity->
     fn build_well_known_url(&self, entity_id: &EntityId) -> FederationResult<Url> {
-        let mut url = entity_id.clone();
+        let mut url = entity_id.as_url().clone();
         url.set_query(None);
         url.set_fragment(None);
         let path = format!("{}/.well-known/openid-federation", url.path().trim_end_matches('/'));
@@ -641,7 +647,7 @@ mod tests {
 
     fn well_known_url(entity_id: &str) -> String {
         FederationClient::new()
-            .build_well_known_url(&Url::parse(entity_id).unwrap())
+            .build_well_known_url(&EntityId::parse(entity_id).unwrap())
             .unwrap()
             .to_string()
     }
