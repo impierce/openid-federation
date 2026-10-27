@@ -1456,7 +1456,8 @@ mod tests {
 
         assert!(result.is_ok(), "result: {:?}", result);
         let chains = result.unwrap();
-        assert_eq!(chains.len(), 2);
+        // Each intermediate ends a chain of its own, as each may be the caller's Trust Anchor.
+        assert_eq!(chains.len(), 4);
 
         let anchors: Vec<String> = chains
             .iter()
@@ -1466,7 +1467,12 @@ mod tests {
 
         assert_eq!(
             anchors,
-            HashSet::from_iter([trust_anchor_one_url.to_string(), trust_anchor_two_url.to_string()])
+            HashSet::from_iter([
+                intermediate_one_url.to_string(),
+                intermediate_two_url.to_string(),
+                trust_anchor_one_url.to_string(),
+                trust_anchor_two_url.to_string()
+            ])
         );
     }
 

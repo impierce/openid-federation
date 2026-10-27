@@ -1280,6 +1280,92 @@ mod tests {
         assert_eq!(chains.len(), 1);
     }
 
+    /// Serves the configurations of a leaf, a Trust Anchor that has a Superior of its own, and that
+    /// Superior. The Trust Anchor endorses the leaf; the Superior endorses the Trust Anchor only if
+    /// `superior_endorses_anchor`.
+    async fn mock_trust_anchor_with_superior(superior_endorses_anchor: bool) -> (MockServer, MockServer, MockServer) {
+        let leaf_server = MockServer::start().await;
+        let anchor_server = MockServer::start().await;
+        let superior_server = MockServer::start().await;
+
+        let url_of = |server: &MockServer| Url::parse(&format!("http://{}", server.address())).unwrap();
+        let (leaf_url, anchor_url, superior_url) =
+            (url_of(&leaf_server), url_of(&anchor_server), url_of(&superior_server));
+
+        let leaf_config = build_entity_configuration(&leaf_url, Some(vec![anchor_url.clone()]), None);
+        mock_entity_configuration(&leaf_server, encode_entity_configuration(&leaf_config)).await;
+
+        let anchor_config = build_entity_configuration(
+            &anchor_url,
+            Some(vec![superior_url.clone()]),
+            Some(build_fetch_endpoint(&anchor_url)),
+        );
+        mock_entity_configuration(&anchor_server, encode_entity_configuration(&anchor_config)).await;
+        mock_subordinate_statement(
+            &anchor_server,
+            &leaf_url,
+            encode_entity_statement(&build_subordinate_statement(&anchor_url, &leaf_url)),
+        )
+        .await;
+
+        let superior_config =
+            build_entity_configuration(&superior_url, None, Some(build_fetch_endpoint(&superior_url)));
+        mock_entity_configuration(&superior_server, encode_entity_configuration(&superior_config)).await;
+        if superior_endorses_anchor {
+            mock_subordinate_statement(
+                &superior_server,
+                &anchor_url,
+                encode_entity_statement(&build_subordinate_statement(&superior_url, &anchor_url)),
+            )
+            .await;
+        }
+
+        (leaf_server, anchor_server, superior_server)
+    }
+
+    fn trust_anchor_ids(chains: &[TrustChain]) -> Vec<Url> {
+        chains
+            .iter()
+            .map(|chain| chain.trust_anchor_entity_id_and_configuration().unwrap().0)
+            .collect()
+    }
+
+    /// Section 4.1: "there are situations in which the Trust Chain will end with a Trust Anchor
+    /// that nonetheless has Superior Entities."
+    #[tokio::test]
+    async fn all_chains_discovery_ends_a_chain_at_a_trust_anchor_with_a_superior() {
+        let (leaf_server, anchor_server, superior_server) = mock_trust_anchor_with_superior(true).await;
+        let url_of = |server: &MockServer| Url::parse(&format!("http://{}", server.address())).unwrap();
+
+        let discovery = FederationClient::new()
+            .discover_all_trust_chains_with_failures(&url_of(&leaf_server))
+            .await
+            .expect("the leaf itself is resolvable");
+
+        assert!(discovery.failures.is_empty(), "failures: {:?}", discovery.failures);
+        assert_eq!(
+            trust_anchor_ids(&discovery.chains),
+            vec![url_of(&anchor_server), url_of(&superior_server)]
+        );
+        assert_eq!(discovery.chains[0].len(), 3);
+        assert_eq!(discovery.chains[1].len(), 4);
+    }
+
+    #[tokio::test]
+    async fn all_chains_discovery_keeps_the_chain_to_a_trust_anchor_whose_superior_does_not_endorse_it() {
+        let (leaf_server, anchor_server, superior_server) = mock_trust_anchor_with_superior(false).await;
+        let url_of = |server: &MockServer| Url::parse(&format!("http://{}", server.address())).unwrap();
+
+        let discovery = FederationClient::new()
+            .discover_all_trust_chains_with_failures(&url_of(&leaf_server))
+            .await
+            .expect("the leaf itself is resolvable");
+
+        assert_eq!(trust_anchor_ids(&discovery.chains), vec![url_of(&anchor_server)]);
+        assert_eq!(discovery.failures.len(), 1, "failures: {:?}", discovery.failures);
+        assert_eq!(discovery.failures[0].entity_id, url_of(&superior_server));
+    }
+
     #[tokio::test]
     async fn all_chains_discovery_reports_failures_when_no_chain_is_found() {
         let leaf_server = MockServer::start().await;

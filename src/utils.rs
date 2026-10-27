@@ -262,6 +262,14 @@ impl FederationClient {
     /// list and does not read trusted anchors from the starting entity configuration. It walks every
     /// authority-hint branch it can resolve and returns all valid chains it finds.
     ///
+    /// Every superior reached ends a chain, not only one without `authority_hints`: a Trust Anchor
+    /// may have Superiors of its own when it also acts as an Intermediate Entity in another
+    /// federation, so an entity with Superiors may still be the caller's Trust Anchor. A leaf below
+    /// an Intermediate Entity below a Trust Anchor therefore yields two chains, one ending at each.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 4.1 Beginning and Ending Trust Chains
+    /// <https://openid.net/specs/openid-federation-1_0.html#name-beginning-and-ending-trust->
+    ///
     /// Branches that cannot be resolved or authenticated are skipped silently. Use
     /// [`FederationClient::discover_all_trust_chains_with_failures`] to learn which ones.
     pub async fn discover_all_trust_chains(&self, start_entity_id: &EntityId) -> FederationResult<Vec<TrustChain>> {
@@ -438,37 +446,30 @@ impl FederationClient {
                 // another entity's identity is rejected here instead of becoming a chain's anchor.
                 let (config_jwt, config) = self.resolve_entity_configuration(entity_id).await?;
                 let is_leaf = chain.is_empty();
-                // Remember if this step added its own config JWT to `chain`.
-                // If yes, this step must remove it before returning.
-                // Otherwise we might pop a parent item or leak items into sibling branches.
-                let mut pushed_config = false;
 
                 if is_leaf {
-                    chain.push(config_jwt.clone());
-                    pushed_config = true;
+                    chain.push(config_jwt);
+                } else {
+                    // Every superior ends a chain, not only one without superiors of its own: a
+                    // Trust Anchor may also act as an Intermediate Entity in another federation
+                    // (Section 4.1), and which anchors to trust is the caller's decision.
+                    chain.push(config_jwt);
+                    match TrustChain::try_new(chain.clone()) {
+                        Ok(trust_chain) => discovery.chains.push(trust_chain),
+                        Err(error) => discovery.failures.push(TrustChainDiscoveryFailure {
+                            entity_id: entity_id.clone(),
+                            error,
+                        }),
+                    }
+                    // Backtrack: the configuration ends this chain only, longer ones continue with
+                    // the subordinate statements about this entity.
+                    chain.pop();
                 }
 
                 let authority_hints = match config.authority_hints {
                     Some(hints) if !hints.is_empty() => hints,
                     _ => {
-                        // Terminal branch: include this node config as the chain endpoint.
-                        if !is_leaf {
-                            chain.push(config_jwt);
-                            pushed_config = true;
-                        }
-
-                        if chain.len() >= 2 {
-                            match TrustChain::try_new(chain.clone()) {
-                                Ok(trust_chain) => discovery.chains.push(trust_chain),
-                                Err(error) => discovery.failures.push(TrustChainDiscoveryFailure {
-                                    entity_id: entity_id.clone(),
-                                    error,
-                                }),
-                            }
-                        }
-
-                        // Backtrack to restore the parent frame's chain state.
-                        if pushed_config {
+                        if is_leaf {
                             chain.pop();
                         }
 
@@ -531,8 +532,8 @@ impl FederationClient {
                     }
                 }
 
-                // Backtrack config push done by this frame (root case).
-                if pushed_config {
+                // Backtrack the leaf configuration pushed by this frame.
+                if is_leaf {
                     chain.pop();
                 }
 
