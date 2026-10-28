@@ -10,8 +10,8 @@
 //!
 //! JWTs are signed and verified with [`jsonwebtoken`], whose crypto backend the application chooses: enable exactly
 //! one of its `aws_lc_rs` and `rust_crypto` features, or install a provider with
-//! `jsonwebtoken::crypto::CryptoProvider::install_default` at startup. With neither or both, signing and verifying
-//! panic.
+//! `jsonwebtoken::crypto::CryptoProvider::install_default` at startup. Without an installed provider, signing and
+//! verifying panic when neither or both features are enabled.
 
 #![warn(clippy::all)]
 
