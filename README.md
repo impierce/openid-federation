@@ -27,8 +27,12 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-openid-federation = "0.1.0"
+openid-federation = "0.3"
+jsonwebtoken = { version = "11.1", default-features = false, features = ["aws_lc_rs"] }
 ```
+
+The crate signs and verifies with [`jsonwebtoken`](https://docs.rs/jsonwebtoken) but leaves its crypto backend to the application.
+Enable exactly one of its `aws_lc_rs` and `rust_crypto` features, as above, or install a provider with `jsonwebtoken::crypto::CryptoProvider::install_default` at startup: with neither or both, signing and verifying panic.
 
 ### Basic Usage
 

@@ -5,6 +5,13 @@
 //! This library provides support for OpenID Federation, which allows
 //! for the creation of trust relationships between OpenID Connect providers
 //! and relying parties through a federation of trust anchors.
+//!
+//! ## Crypto backend
+//!
+//! JWTs are signed and verified with [`jsonwebtoken`], whose crypto backend the application chooses: enable exactly
+//! one of its `aws_lc_rs` and `rust_crypto` features, or install a provider with
+//! `jsonwebtoken::crypto::CryptoProvider::install_default` at startup. With neither or both, signing and verifying
+//! panic.
 
 #![warn(clippy::all)]
 

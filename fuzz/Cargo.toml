@@ -10,7 +10,7 @@ license = "Apache-2.0"
 cargo-fuzz = true
 
 [dependencies]
-jsonwebtoken = "11.1"
+jsonwebtoken = { version = "11.1", features = ["aws_lc_rs"] }
 libfuzzer-sys = "0.4"
 openid-federation = { path = ".." }
 serde = "1.0"
