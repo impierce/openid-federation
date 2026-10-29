@@ -30,7 +30,6 @@ tokio = { version = "1.0", features = ["full"] }
 url = { version = "2.5", features = ["serde"] }
 
 [dev-dependencies]
-# The tests sign and verify, so they enable a backend; it shares the crypto library that reqwest's `rustls` pulls in.
 jsonwebtoken = { version = "11.1", default-features = false, features = ["aws_lc_rs"] }
 tokio-test = "0.4"
 wiremock = "0.6"
