@@ -83,7 +83,7 @@ When a pull request implements a feature, change its status to ✅ in the same p
 Coding agents in this repository use the skills of [mattpocock/skills](https://github.com/mattpocock/skills): the set its Claude Code plugin ships, from one release.
 They are committed rather than installed as a plugin, because cloud sessions of Claude Code don't install the plugins a repository enables.
 
-- `.agents/skills/` holds the skills; `.claude/skills/` holds one symlink per skill, which is where Claude Code reads them. On Windows, clone with `git config core.symlinks true` so the links stay links.
+- `.agents/skills/` holds the skills; `.claude/skills/` holds one symlink per skill, which is where Claude Code reads them. On Windows, links need Developer Mode (or the *Create symbolic links* user right) and `core.symlinks` set before checkout: clone with `git clone -c core.symlinks=true <url>`, or set `git config --global core.symlinks true` first. In an existing clone, set `git config core.symlinks true`, then run `git checkout -- .claude/skills` to turn the plain files back into links.
 - `skills-lock.json` pins the release (`ref`) and a hash of every skill. The [`skills`](https://github.com/vercel-labs/skills) CLI writes it.
 - The `Agent skills` workflow checks for a new release every Monday and opens a pull request that installs it. Read the upstream changelog it links before merging; when an entry asks to re-run `/setup-matt-pocock-skills`, run it on that branch so `docs/agents/` follows the new templates.
 - To install a release by hand, run `scripts/update-agent-skills.sh <tag>`, for example `scripts/update-agent-skills.sh v1.3.2`. It needs Node.js, `curl` and `jq`.

@@ -22,9 +22,10 @@ if [ -z "$names" ]; then
   exit 1
 fi
 
+mapfile -t skills <<<"$names"
+
 rm -rf .agents/skills .claude/skills skills-lock.json
-# shellcheck disable=SC2086 # one --skill argument per name
 npx --yes "$skills_cli" add "https://github.com/mattpocock/skills/tree/${tag}" \
-  --agent universal claude-code --skill $names --yes
+  --agent universal claude-code --skill "${skills[@]}" --yes
 
 echo "Installed $(jq '.skills | length' skills-lock.json) skills from mattpocock/skills ${tag}."
