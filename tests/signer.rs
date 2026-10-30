@@ -8,8 +8,8 @@
 use async_trait::async_trait;
 use jsonwebtoken::{Algorithm, Header};
 use openid_federation::{
-    sign_compact_jws, EntityConfiguration, EntityId, FederationError, InMemorySigner, Jwk, JwkSet, JwtArtifactType,
-    SignError, Signer, SubordinateStatement, TrustChain,
+    sign_compact_jws, sign_federation_jwt, EntityConfiguration, EntityId, FederationError, InMemorySigner, Jwk, JwkSet,
+    JwtArtifactType, SignError, Signer, SubordinateStatement, TrustChain,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -196,4 +196,170 @@ async fn header_alg_other_than_signer_fails_before_signing() {
         .unwrap_err();
     assert!(matches!(error, FederationError::Configuration(_)), "{error:?}");
     assert_eq!(signer.calls.load(Ordering::SeqCst), 0, "the signer must not be called");
+}
+
+/// Wraps a signer and counts the calls that reach it.
+struct Counting<S> {
+    inner: S,
+    calls: AtomicUsize,
+}
+
+impl<S> Counting<S> {
+    fn new(inner: S) -> Self {
+        Self {
+            inner,
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl<S: Signer> Signer for Counting<S> {
+    fn alg(&self) -> Algorithm {
+        self.inner.alg()
+    }
+
+    fn kid(&self) -> &str {
+        self.inner.kid()
+    }
+
+    async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, SignError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.sign(signing_input).await
+    }
+}
+
+fn typ_and_kid(jwt: &str) -> (Option<String>, Option<String>) {
+    let header = jsonwebtoken::decode_header(jwt).unwrap();
+    (header.typ, header.kid)
+}
+
+#[tokio::test]
+async fn entity_configuration_sign_sets_typ_and_kid() {
+    let entity_id = EntityId::parse("https://ta.example.org").unwrap();
+    for (alg, der, jwk) in cases() {
+        let signer = InMemorySigner::from_der(alg, "ta-key", der).unwrap();
+        let configuration =
+            EntityConfiguration::new(entity_id.clone(), public_jwks(jwk, "ta-key"), now() + 3600, now());
+
+        let jwt = configuration
+            .sign(&signer)
+            .await
+            .unwrap_or_else(|e| panic!("{alg:?}: {e}"));
+
+        assert_eq!(
+            typ_and_kid(&jwt),
+            (Some("entity-statement+jwt".to_string()), Some("ta-key".to_string()))
+        );
+        assert_eq!(
+            EntityConfiguration::from_verified_jwt(&jwt, &entity_id).unwrap(),
+            configuration
+        );
+    }
+}
+
+#[tokio::test]
+async fn subordinate_statement_sign_sets_typ_and_kid() {
+    let anchor_id = EntityId::parse("https://ta.example.org").unwrap();
+    let leaf_id = EntityId::parse("https://op.example.org").unwrap();
+    for (alg, der, jwk) in cases() {
+        let signer = InMemorySigner::from_der(alg, "ta-key", der).unwrap();
+        let statement = SubordinateStatement::new(
+            anchor_id.clone(),
+            leaf_id.clone(),
+            now() + 3600,
+            now(),
+            public_jwks(jwk, "op-key"),
+        );
+
+        let jwt = statement.sign(&signer).await.unwrap_or_else(|e| panic!("{alg:?}: {e}"));
+
+        assert_eq!(
+            typ_and_kid(&jwt),
+            (Some("entity-statement+jwt".to_string()), Some("ta-key".to_string()))
+        );
+        let verified =
+            SubordinateStatement::from_verified_jwt(&jwt, &anchor_id, &leaf_id, &public_jwks(jwk, "ta-key")).unwrap();
+        assert_eq!(verified, statement);
+    }
+}
+
+#[tokio::test]
+async fn entity_configuration_sign_rejects_kid_outside_own_jwks() {
+    let entity_id = EntityId::parse("https://ta.example.org").unwrap();
+    let signer = Counting::new(InMemorySigner::from_der(Algorithm::ES256, "other-key", EC_P256_DER).unwrap());
+    let configuration = EntityConfiguration::new(entity_id, public_jwks(EC_P256_JWK, "ta-key"), now() + 3600, now());
+
+    let error = configuration.sign(&signer).await.unwrap_err();
+
+    assert!(matches!(error, FederationError::Configuration(_)), "{error:?}");
+    assert_eq!(signer.calls(), 0, "the signer must not be called");
+}
+
+#[tokio::test]
+async fn entity_configuration_sign_rejects_other_key_under_published_kid() {
+    // The `kid` is in `jwks`, but it names the EC key, and the signer holds the Ed25519 key.
+    let entity_id = EntityId::parse("https://ta.example.org").unwrap();
+    let signer = InMemorySigner::from_der(Algorithm::EdDSA, "ta-key", ED25519_DER).unwrap();
+    let configuration = EntityConfiguration::new(entity_id, public_jwks(EC_P256_JWK, "ta-key"), now() + 3600, now());
+
+    let error = configuration.sign(&signer).await.unwrap_err();
+
+    assert!(matches!(error, FederationError::Configuration(_)), "{error:?}");
+    assert!(error.to_string().contains("does not verify"), "{error}");
+}
+
+#[tokio::test]
+async fn invalid_statements_fail_before_the_signer_is_called() {
+    let anchor_id = EntityId::parse("https://ta.example.org").unwrap();
+    let leaf_id = EntityId::parse("https://op.example.org").unwrap();
+    let signer = Counting::new(InMemorySigner::from_der(Algorithm::ES256, "ta-key", EC_P256_DER).unwrap());
+    let keys = public_jwks(EC_P256_JWK, "ta-key");
+
+    let expired = EntityConfiguration::new(anchor_id.clone(), keys.clone(), now() - 60, now() - 3600);
+    assert!(expired.sign(&signer).await.is_err());
+
+    let self_issued =
+        SubordinateStatement::new(anchor_id.clone(), anchor_id.clone(), now() + 3600, now(), keys.clone());
+    assert!(self_issued.sign(&signer).await.is_err());
+
+    let mut private = keys.clone();
+    private.keys[0].d = Some("ZA".to_string());
+    let publishes_private_key =
+        SubordinateStatement::new(anchor_id.clone(), leaf_id, now() + 3600, now(), private.clone());
+    assert!(publishes_private_key.sign(&signer).await.is_err());
+    let configuration_with_private_key = EntityConfiguration::new(anchor_id, private, now() + 3600, now());
+    assert!(configuration_with_private_key.sign(&signer).await.is_err());
+
+    assert_eq!(signer.calls(), 0, "the signer must not be called");
+}
+
+/// A signer that names no key.
+struct NoKid;
+
+#[async_trait]
+impl Signer for NoKid {
+    fn alg(&self) -> Algorithm {
+        Algorithm::ES256
+    }
+
+    fn kid(&self) -> &str {
+        ""
+    }
+
+    async fn sign(&self, _: &[u8]) -> Result<Vec<u8>, SignError> {
+        unreachable!("a signer without kid must not be called")
+    }
+}
+
+#[tokio::test]
+async fn signer_without_kid_is_refused() {
+    let error = sign_federation_jwt(&serde_json::json!({}), JwtArtifactType::EntityStatement, &NoKid)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, FederationError::Configuration(_)), "{error:?}");
 }

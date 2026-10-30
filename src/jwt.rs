@@ -450,6 +450,36 @@ pub async fn sign_compact_jws<T: Serialize + ?Sized>(
     Ok(token)
 }
 
+/// Signs `claims` as a federation artifact of `artifact_type`: a compact JWS whose `typ` is the
+/// artifact's media type and whose `kid` names the signer's key, as every federation artifact
+/// requires.
+///
+/// This is the one signing path the artifact types share: Entity Configurations and Subordinate
+/// Statements call it from their `sign` methods after their own checks.
+///
+/// # Errors
+///
+/// [`FederationError::Configuration`] when the signer has an empty `kid`, and the errors of
+/// [`sign_compact_jws`].
+///
+/// Reference: OpenID Federation 1.0 - Section 3 Entity Statement
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-3>)
+pub async fn sign_federation_jwt<T: Serialize + ?Sized>(
+    claims: &T,
+    artifact_type: JwtArtifactType,
+    signer: &dyn Signer,
+) -> FederationResult<String> {
+    if signer.kid().is_empty() {
+        return Err(FederationError::Configuration(
+            "a federation artifact must name its signing key, but the signer's kid is empty".to_string(),
+        ));
+    }
+    let mut header = Header::new(signer.alg());
+    header.typ = Some(artifact_type.header_value().to_string());
+    header.kid = Some(signer.kid().to_string());
+    sign_compact_jws(&header, claims, signer).await
+}
+
 /// A [`Signer`] over a private key held in memory, signing through `jsonwebtoken`.
 ///
 /// The key is DER-encoded, in the form `jsonwebtoken` takes it: PKCS#1 for RSA (`RS256`, `RS384`,
