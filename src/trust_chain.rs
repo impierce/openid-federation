@@ -283,6 +283,7 @@ mod tests {
             x: None,
             y: None,
             k: Some(URL_SAFE_NO_PAD.encode(TEST_SECRET.as_bytes())),
+            additional: Default::default(),
         });
         jwks
     }
@@ -661,6 +662,7 @@ mod tests {
             x: None,
             y: None,
             k: Some(URL_SAFE_NO_PAD.encode(secret.as_bytes())),
+            additional: Default::default(),
         });
         jwks
     }

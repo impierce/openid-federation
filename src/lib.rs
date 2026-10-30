@@ -311,6 +311,7 @@ mod tests {
             x: None,
             y: None,
             k: None,
+            additional: Default::default(),
         };
 
         assert_eq!(jwk.kty, "RSA");
@@ -343,6 +344,7 @@ mod tests {
             x: None,
             y: None,
             k: None,
+            additional: Default::default(),
         };
 
         jwks.add_key(jwk);
@@ -714,6 +716,7 @@ mod tests {
             x: None,
             y: None,
             k: Some("dGVzdF9zZWNyZXRfa2V5".to_string()), // base64 encoded "test_secret_key"
+            additional: Default::default(),
         }
     }
 
