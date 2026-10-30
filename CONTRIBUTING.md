@@ -78,6 +78,18 @@ Don't bump the version or edit `CHANGELOG.md` outside that release pull request.
 [`docs/FEATURES.md`](docs/FEATURES.md) lists every implemented and planned feature against the specification, with its tracking issue.
 When a pull request implements a feature, change its status to ✅ in the same pull request.
 
+## Agent skills
+
+Coding agents in this repository use the skills of [mattpocock/skills](https://github.com/mattpocock/skills): the set its Claude Code plugin ships, from one release.
+They are committed rather than installed as a plugin, because cloud sessions of Claude Code don't install the plugins a repository enables.
+
+- `.agents/skills/` holds the skills; `.claude/skills/` holds one symlink per skill, which is where Claude Code reads them. On Windows, clone with `git config core.symlinks true` so the links stay links.
+- `skills-lock.json` pins the release (`ref`) and a hash of every skill. The [`skills`](https://github.com/vercel-labs/skills) CLI writes it.
+- The `Agent skills` workflow checks for a new release every Monday and opens a pull request that installs it. Read the upstream changelog it links before merging; when an entry asks to re-run `/setup-matt-pocock-skills`, run it on that branch so `docs/agents/` follows the new templates.
+- To install a release by hand, run `scripts/update-agent-skills.sh <tag>`, for example `scripts/update-agent-skills.sh v1.3.2`. It needs Node.js, `curl` and `jq`.
+
+Don't edit the skills in place: the next update overwrites them. Repository-specific guidance belongs in `AGENTS.md` and `docs/agents/`, which the skills read.
+
 ## Security
 
 Please report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md), and not in public issues or pull requests.

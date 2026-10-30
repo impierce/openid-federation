@@ -1,0 +1,54 @@
+name: Agent skills
+
+# Opens a pull request when mattpocock/skills publishes a release newer than the one pinned in
+# skills-lock.json, so the vendored skills stay current without tracking upstream by hand.
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    if: github.repository_owner == 'impierce'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: release
+        run: |
+          set -euo pipefail
+          latest=$(git ls-remote --tags --refs --sort=-v:refname https://github.com/mattpocock/skills 'v*' |
+            head -n 1 | sed 's|.*refs/tags/||')
+          pinned=$(jq -r '[.skills[].ref] | unique | join(",")' skills-lock.json)
+          echo "Latest release ${latest}, pinned ${pinned}"
+          echo "latest=${latest}" >> "$GITHUB_OUTPUT"
+          echo "outdated=$([ "$latest" != "$pinned" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - if: steps.release.outputs.outdated == 'true'
+        env:
+          TAG: ${{ steps.release.outputs.latest }}
+        run: scripts/update-agent-skills.sh "$TAG"
+      # An App token (unlike GITHUB_TOKEN) lets the pull request trigger QA.
+      - if: steps.release.outputs.outdated == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_PLZ_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - if: steps.release.outputs.outdated == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: agent-skills/update
+          delete-branch: true
+          title: "chore: update agent skills to mattpocock/skills ${{ steps.release.outputs.latest }}"
+          commit-message: "chore: update agent skills to mattpocock/skills ${{ steps.release.outputs.latest }}"
+          body: |
+            Installs the agent skills of [mattpocock/skills ${{ steps.release.outputs.latest }}](https://github.com/mattpocock/skills/releases/tag/${{ steps.release.outputs.latest }}) with `scripts/update-agent-skills.sh`.
+
+            Before merging, read the [changelog](https://github.com/mattpocock/skills/blob/${{ steps.release.outputs.latest }}/CHANGELOG.md). When an entry says to re-run `/setup-matt-pocock-skills`, run it on this branch so `docs/agents/` follows the new templates.
