@@ -301,6 +301,20 @@ impl Jwk {
                 DecodingKey::from_ec_components(x, y)
                     .map_err(|e| FederationError::InvalidMetadata(format!("Failed to create EC decoding key: {}", e)))
             }
+            "OKP" => {
+                if self.crv.as_deref() != Some("Ed25519") {
+                    return Err(FederationError::InvalidMetadata(format!(
+                        "Unsupported OKP curve: {}",
+                        self.crv.as_deref().unwrap_or("none")
+                    )));
+                }
+                let x = self
+                    .x
+                    .as_ref()
+                    .ok_or_else(|| FederationError::InvalidMetadata("OKP key missing public key 'x'".to_string()))?;
+                DecodingKey::from_ed_components(x)
+                    .map_err(|e| FederationError::InvalidMetadata(format!("Failed to create OKP decoding key: {}", e)))
+            }
             "oct" => {
                 let k = self
                     .k

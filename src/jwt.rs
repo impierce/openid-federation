@@ -1,10 +1,13 @@
 //! JWT utilities for OpenID Federation.
 
 use crate::jwk::JwkSet;
-use crate::{EntityId, FederationError, FederationResult};
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use crate::{EntityId, FederationError, FederationResult, SignError};
+use async_trait::async_trait;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use jsonwebtoken::{decode, encode, Algorithm, AlgorithmFamily, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 
 /// JWT artifact type for OpenID Federation.
 ///
@@ -359,6 +362,170 @@ pub fn extract_claims_unverified<T: for<'de> Deserialize<'de>>(token: &str) -> F
 impl Default for JwtProcessor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Produces JWS signatures with one Federation Entity Key.
+///
+/// A signer binds one key, its `kid` and one algorithm. The private key lives behind it, in memory
+/// ([`InMemorySigner`]), an HSM or a cloud key management service, which is why signing is
+/// `async`. The signature is returned in the JWS form of the algorithm: raw `r || s` for ECDSA,
+/// never DER. [`sign_compact_jws`] turns it into a compact JWS.
+///
+/// The trait has the shape of `identity_kit::jose::Signer`, so an application that keeps its keys
+/// in `identity-kit` adapts them in a few lines, without this crate depending on it (ADR 0005):
+///
+/// ```rust,ignore
+/// struct FederationSigner<S> {
+///     inner: S,
+///     kid: String,
+/// }
+///
+/// #[async_trait::async_trait]
+/// impl<S: identity_kit::jose::Signer> openid_federation::Signer for FederationSigner<S> {
+///     fn alg(&self) -> jsonwebtoken::Algorithm {
+///         match self.inner.alg() {
+///             identity_kit::jose::JwsAlgorithm::ES256 => jsonwebtoken::Algorithm::ES256,
+///             identity_kit::jose::JwsAlgorithm::EdDSA => jsonwebtoken::Algorithm::EdDSA,
+///             // ... one arm per algorithm the application uses
+///             other => unimplemented!("{other:?} has no jsonwebtoken counterpart"),
+///         }
+///     }
+///
+///     fn kid(&self) -> &str {
+///         &self.kid
+///     }
+///
+///     async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, openid_federation::SignError> {
+///         self.inner.sign(signing_input).await.map_err(openid_federation::SignError::new)
+///     }
+/// }
+/// ```
+///
+/// Reference: OpenID Federation 1.0 - Section 3 Entity Statement
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-3>) and Appendix A.1
+/// (<https://openid.net/specs/openid-federation-1_0.html#appendix-A.1>)
+#[async_trait]
+pub trait Signer: Send + Sync {
+    /// The algorithm every signature of this signer uses.
+    fn alg(&self) -> Algorithm;
+
+    /// The `kid` of the key, as published in the issuer's `jwks`.
+    fn kid(&self) -> &str;
+
+    /// Signs `signing_input`, the ASCII bytes of `BASE64URL(header) || '.' || BASE64URL(payload)`.
+    async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, SignError>;
+}
+
+/// Encodes `claims` under `header` as a compact JWS signed by `signer`.
+///
+/// The header is serialized as given: its `alg` must equal the signer's algorithm, and `typ` and
+/// `kid` are whatever the caller set.
+///
+/// # Errors
+///
+/// [`FederationError::Configuration`] when `header.alg` differs from [`Signer::alg`], checked
+/// before the signer is called; [`FederationError::Signing`] when the signer fails.
+///
+/// Reference: RFC 7515 Section 7.1 (<https://www.rfc-editor.org/rfc/rfc7515#section-7.1>)
+pub async fn sign_compact_jws<T: Serialize + ?Sized>(
+    header: &Header,
+    claims: &T,
+    signer: &dyn Signer,
+) -> FederationResult<String> {
+    if header.alg != signer.alg() {
+        return Err(FederationError::Configuration(format!(
+            "JWS header alg {:?} differs from the algorithm {:?} of signer {:?}",
+            header.alg,
+            signer.alg(),
+            signer.kid()
+        )));
+    }
+    let mut token = URL_SAFE_NO_PAD.encode(serde_json::to_vec(header)?);
+    token.push('.');
+    token.push_str(&URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims)?));
+    let signature = signer.sign(token.as_bytes()).await?;
+    token.push('.');
+    token.push_str(&URL_SAFE_NO_PAD.encode(signature));
+    Ok(token)
+}
+
+/// A [`Signer`] over a private key held in memory, signing through `jsonwebtoken`.
+///
+/// The key is DER-encoded, in the form `jsonwebtoken` takes it: PKCS#1 for RSA (`RS256`, `RS384`,
+/// `RS512`, `PS256`, `PS384`, `PS512`), PKCS#8 for EC P-256 and P-384 (`ES256`, `ES384`) and for
+/// Ed25519 (`EdDSA`). Signing runs on the crypto backend the application chose for
+/// `jsonwebtoken`. Symmetric algorithms are refused: a Federation Entity Key is a public/private
+/// key pair.
+///
+/// Reference: OpenID Federation 1.0 - Appendix A.1
+/// (<https://openid.net/specs/openid-federation-1_0.html#appendix-A.1>)
+pub struct InMemorySigner {
+    alg: Algorithm,
+    kid: String,
+    key: EncodingKey,
+}
+
+impl InMemorySigner {
+    /// A signer for the DER-encoded private key `der`, which signs with `alg` under `kid`.
+    ///
+    /// The key is used once here, so a malformed key, or one that does not fit `alg`, fails now
+    /// rather than on the first statement.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::Configuration`] for an empty `kid` or a symmetric algorithm, and
+    /// [`FederationError::Signing`] when the key cannot sign with `alg`.
+    pub fn from_der(alg: Algorithm, kid: impl Into<String>, der: &[u8]) -> FederationResult<Self> {
+        let kid = kid.into();
+        if kid.is_empty() {
+            return Err(FederationError::Configuration(
+                "a signer needs a non-empty kid".to_string(),
+            ));
+        }
+        let key = match alg.family() {
+            AlgorithmFamily::Rsa => EncodingKey::from_rsa_der(der),
+            AlgorithmFamily::Ec => EncodingKey::from_ec_der(der),
+            AlgorithmFamily::Ed => EncodingKey::from_ed_der(der),
+            AlgorithmFamily::Hmac => {
+                return Err(FederationError::Configuration(format!(
+                    "{alg:?} is symmetric; a Federation Entity Key is a public/private key pair"
+                )))
+            }
+        };
+        let signer = Self { alg, kid, key };
+        signer.sign_now(b"")?;
+        Ok(signer)
+    }
+
+    fn sign_now(&self, signing_input: &[u8]) -> Result<Vec<u8>, SignError> {
+        let signature = jsonwebtoken::crypto::sign(signing_input, &self.key, self.alg).map_err(SignError::new)?;
+        URL_SAFE_NO_PAD.decode(signature).map_err(SignError::new)
+    }
+}
+
+#[async_trait]
+impl Signer for InMemorySigner {
+    fn alg(&self) -> Algorithm {
+        self.alg
+    }
+
+    fn kid(&self) -> &str {
+        &self.kid
+    }
+
+    async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, SignError> {
+        self.sign_now(signing_input)
+    }
+}
+
+/// Shows the algorithm and `kid`, never the key.
+impl fmt::Debug for InMemorySigner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InMemorySigner")
+            .field("alg", &self.alg)
+            .field("kid", &self.kid)
+            .finish_non_exhaustive()
     }
 }
 
