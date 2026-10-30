@@ -1,6 +1,6 @@
 # OpenID Federation: Design
 
-`openid-federation` is a Rust library for [OpenID Federation 1.0](https://openid.net/specs/openid-federation-1_0.html): the data model of Entity Statements, Trust Chains and Trust Marks, their validation, and a client that discovers and authenticates trust chains over the federation endpoints.
+`openid-federation` is a Rust library for [OpenID Federation 1.0](https://openid.net/specs/openid-federation-1_0.html): the data model of Entity Statements, Trust Chains and Trust Marks, their validation, and a client that discovers and authenticates trust chains over the federation endpoints. The [issuing side](#issuing-side), for Trust Anchors and Intermediate Entities that sign statements and serve those endpoints, is being added to the same crate (ADR 0005).
 It is published as **one crate** without Cargo features. Consumers are `impierce/openid4vc` and `impierce/ssi-agent` (UniCore), which use it to establish trust between wallets, issuers and verifiers that belong to a federation.
 
 This document describes the architecture as it is and the direction it is going. [`FEATURES.md`](FEATURES.md) tracks which parts of the specification are implemented and which are planned.
@@ -47,6 +47,25 @@ A trust chain is a list of JWTs: the leaf's Entity Configuration first, then one
 `FederationClient` fetches the pieces: `resolve_entity_configuration` from `<entity id>/.well-known/openid-federation`, `fetch_subordinate_statement` from the superior's `federation_fetch_endpoint`. `discover_trust_chain` walks `authority_hints` towards a given set of Trust Anchors and returns the first chain that authenticates. `discover_all_trust_chains_with_failures` walks every branch and returns every chain plus every skipped branch as a `TrustChainDiscoveryFailure`. It ends a chain at every superior it reaches, not only at entities without `authority_hints`, since a Trust Anchor may have Superiors of its own when it also acts as an Intermediate Entity in another federation (Section 4.1); the caller picks the anchors it trusts. Superiors are asked about an entity under the `sub` it publishes: an `EntityId` keeps the spelling it was parsed from and compares as a URL, so `https://ta.example.org` and `https://ta.example.org/` are the same entity, but requests carry the spelling the entity uses (ADR 0004).
 
 Trust Marks are carried in an Entity Configuration as `TrustMarkEntry { trust_mark_type, trust_mark }`, the type next to the signed Trust Mark JWT. `validate` checks that the type matches the `trust_mark_type` claim inside the JWT. Verifying the Trust Mark's signature against `trust_mark_issuers`, `trust_mark_owners` and delegations is the trust evaluation step and is planned ([`FEATURES.md`](FEATURES.md)).
+
+## Issuing side
+
+A Trust Anchor or Intermediate Entity publishes its Entity Configuration, issues Subordinate Statements about its Immediate Subordinates, and serves the federation endpoints (Appendix A.1, Sections 8 and 9). The issuing side is planned in [`FEATURES.md`](FEATURES.md) and built on three pieces, decided in ADR 0005:
+
+- **Endpoint handlers.** One function per federation endpoint. It takes the parsed request (HTTP method and query or form parameters, repeated parameters kept) and returns a response value: HTTP status, content type and body. The crate depends on no web framework; the application mounts each handler in its own router and keeps caching, rate limiting and access policy there. Handlers ignore parameters they do not know (Section 8) and answer errors with the error response of Section 8.9.
+- **The `Signer` trait.** `alg()`, `kid()` and `async fn sign(signing_input)`, the same shape as `identity_kit::jose::Signer`, so the private key can live in memory, an HSM or a KMS. The crate's in-memory signer takes a DER-encoded private key and signs through `jsonwebtoken`, so the crypto backend stays the application's choice. Every signed artifact gets its `typ` from the artifact and its `kid` from the signer.
+- **Storage traits.** Registered subordinates, issued Trust Marks and the entity's keys are read and written through async traits that the application implements on its own database. In-memory implementations ship for tests, examples and small deployments.
+
+The relying side is unchanged by any of this, and a relying-only application pulls in no extra dependency. As the issuing-side issues land, the layout grows by:
+
+```
+src/
+├── endpoint.rs   # the endpoint handlers, their request and response types, error responses (Section 8.9)
+├── store.rs      # storage traits for subordinates and Trust Marks, with in-memory implementations
+└── keys.rs       # the entity's key set across rollover (Section 11.2), with an in-memory implementation
+```
+
+The `Signer` trait and the function that builds a compact JWS with it join the JOSE layer in `jwt.rs`.
 
 ## Errors
 
