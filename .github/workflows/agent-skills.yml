@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   update:
@@ -19,8 +20,17 @@ jobs:
         with:
           persist-credentials: false
       - id: update
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # While the pull request of an earlier run is open, leave its branch alone: the action
+          # would rebuild it and drop commits pushed to it, such as a setup-matt-pocock-skills re-run.
+          if [ -n "$(gh pr list --repo "$GITHUB_REPOSITORY" --head agent-skills/update --state open --json number --jq '.[].number')" ]; then
+            echo "An agent skills pull request is still open; merge or close it first."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # The CLI is pinned here, unlike `skills@latest` by hand, so CI never runs a release
           # nobody has looked at. Bump it deliberately.
           npx --yes skills@1.7.2 update --project --yes
