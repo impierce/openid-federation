@@ -7,6 +7,18 @@ use jsonwebtoken::{DecodingKey, EncodingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+/// The members `Jwk` has a field for. `Jwk::additional` must not repeat them, or the key serializes
+/// with a duplicate member name (RFC 7517 Section 4).
+const NAMED_MEMBERS: [&str; 21] = [
+    "kty", "use", "key_ops", "alg", "kid", "x5u", "x5c", "x5t", "x5t#S256", "n", "e", "d", "p", "q", "dp", "dq", "qi",
+    "crv", "x", "y", "k",
+];
+
+/// The private or symmetric key members: `d`, `p`, `q`, `dp`, `dq`, `qi` and `oth`
+/// (RFC 7518 Section 6.3.2) for RSA, `d` for EC (RFC 7518 Section 6.2.2) and OKP
+/// (RFC 8037 Section 2), and `k` for `oct` (RFC 7518 Section 6.4.1).
+const PRIVATE_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+
 /// JSON Web Key as defined in RFC 7517.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Jwk {
@@ -159,6 +171,15 @@ impl JwkSet {
                     private.join(", ")
                 )));
             }
+            if let Some(name) = key
+                .additional
+                .keys()
+                .find(|name| NAMED_MEMBERS.contains(&name.as_str()))
+            {
+                return Err(FederationError::InvalidMetadata(format!(
+                    "JWK {kid:?} repeats the {name} member in its additional members"
+                )));
+            }
         }
         Ok(())
     }
@@ -197,7 +218,9 @@ impl Jwk {
         public.dq = None;
         public.qi = None;
         public.k = None;
-        public.additional.remove("oth");
+        for member in PRIVATE_MEMBERS {
+            public.additional.remove(member);
+        }
         public
     }
 
@@ -230,9 +253,7 @@ impl Jwk {
         Ok(jwk.thumbprint(ThumbprintHash::SHA256)?)
     }
 
-    /// The private or symmetric key members this key carries: `d`, `p`, `q`, `dp`, `dq`, `qi` and
-    /// `oth` (RFC 7518 Section 6.3.2) for RSA, `d` for EC (RFC 7518 Section 6.2.2) and OKP
-    /// (RFC 8037 Section 2), and `k` for `oct` (RFC 7518 Section 6.4.1).
+    /// The private or symmetric key members this key carries, as a field or in `additional`.
     fn private_members(&self) -> Vec<&'static str> {
         let named = [
             ("d", &self.d),
@@ -243,15 +264,13 @@ impl Jwk {
             ("qi", &self.qi),
             ("k", &self.k),
         ];
-        let mut members: Vec<&'static str> = named
+        PRIVATE_MEMBERS
             .into_iter()
-            .filter(|(_, value)| value.is_some())
-            .map(|(name, _)| name)
-            .collect();
-        if self.additional.contains_key("oth") {
-            members.push("oth");
-        }
-        members
+            .filter(|member| {
+                let as_field = named.iter().any(|(name, value)| name == member && value.is_some());
+                as_field || self.additional.contains_key(*member)
+            })
+            .collect()
     }
 
     /// Convert the JWK to a DecodingKey for JWT verification.
@@ -461,11 +480,42 @@ mod tests {
         assert!(set(vec![key.to_public()]).validate().is_err());
     }
 
+    /// A private member placed in `additional` by hand, which deserialization never does.
+    fn with_additional_private_member(member: &str) -> Jwk {
+        let mut key = rsa_public("a");
+        key.additional.insert(member.to_string(), json!("c2VjcmV0"));
+        key
+    }
+
+    #[test]
+    fn validate_rejects_private_member_in_additional() {
+        for member in PRIVATE_MEMBERS {
+            let error = set(vec![with_additional_private_member(member)])
+                .validate()
+                .unwrap_err();
+            assert!(error.to_string().contains("private key material"), "{member}: {error}");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_named_member_repeated_in_additional() {
+        let mut key = rsa_public("a");
+        key.additional.insert("kid".to_string(), json!("b"));
+        let error = set(vec![key]).validate().unwrap_err();
+        assert!(error.to_string().contains("repeats the kid member"), "{error}");
+    }
+
     #[test]
     fn to_public_drops_every_private_member() {
-        for private in private_keys() {
+        let mut keys = private_keys();
+        keys.extend(PRIVATE_MEMBERS.map(with_additional_private_member));
+        for private in keys {
             let public = private.to_public();
             assert!(public.private_members().is_empty(), "{public:?}");
+            let serialized = serde_json::to_value(&public).unwrap();
+            for member in PRIVATE_MEMBERS {
+                assert!(serialized.get(member).is_none(), "{member} in {serialized}");
+            }
             assert_eq!(public.kid, private.kid);
             assert_eq!(public.x, private.x);
             assert_eq!(public.n, private.n);
