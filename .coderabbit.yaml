@@ -7,3 +7,7 @@ reviews:
     # Fuzz seeds are specification examples and generated inputs, not code to review.
     - "!fuzz/seeds/**"
     - "!fuzz/corpus/**"
+    # Agent skills are upstream files from mattpocock/skills, installed and pinned by the skills CLI.
+    - "!.agents/skills/**"
+    - "!.claude/skills/**"
+    - "!skills-lock.json"

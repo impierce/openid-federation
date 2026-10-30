@@ -1,0 +1,48 @@
+name: Agent skills
+
+# Runs the skills CLI's own update (`skills update`) and opens a pull request when mattpocock/skills
+# changed any installed skill, so the committed skills stay current without tracking upstream by hand.
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    if: github.repository_owner == 'impierce'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: update
+        run: |
+          set -euo pipefail
+          # The CLI is pinned here, unlike `skills@latest` by hand, so CI never runs a release
+          # nobody has looked at. Bump it deliberately.
+          npx --yes skills@1.7.2 update --project --yes
+          echo "changed=$([ -n "$(git status --porcelain)" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      # An App token (unlike GITHUB_TOKEN) lets the pull request trigger QA.
+      - if: steps.update.outputs.changed == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_PLZ_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - if: steps.update.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: agent-skills/update
+          delete-branch: true
+          title: "chore: update agent skills from mattpocock/skills"
+          commit-message: "chore: update agent skills from mattpocock/skills"
+          body: |
+            Runs `npx skills update --project` (skills CLI 1.7.2), which updated the skills whose upstream content changed.
+
+            Before merging, read the upstream [changelog](https://github.com/mattpocock/skills/blob/main/CHANGELOG.md). When an entry says to re-run `/setup-matt-pocock-skills`, run it on this branch so `docs/agents/` follows the new templates. New upstream skills are not added by an update: re-run `npx skills@latest add mattpocock/skills` to pick them up.
