@@ -1,6 +1,7 @@
 //! JWKs and JWK Sets (RFC 7517): arbitrary JSON deserializes without panicking, every key converts
-//! to a `jsonwebtoken` decoding and encoding key or fails cleanly, `kid` lookup and signature-key
-//! selection never panic, and whatever parses survives a round trip through JSON.
+//! to a `jsonwebtoken` decoding and encoding key or fails cleanly, thumbprints, `kid` lookup,
+//! signature-key selection and set validation never panic, the public half of a key has the same
+//! thumbprint as the key, and whatever parses survives a round trip through JSON.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
@@ -18,6 +19,11 @@ where
 fn exercise(jwk: &Jwk) {
     let _ = jwk.to_decoding_key();
     let _ = jwk.to_encoding_key();
+    let public = jwk.to_public();
+    if let Ok(thumbprint) = jwk.thumbprint() {
+        assert_eq!(public.thumbprint().ok(), Some(thumbprint), "the public half has the key's thumbprint");
+    }
+    roundtrip(&public);
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -34,6 +40,7 @@ fuzz_target!(|data: &[u8]| {
         }
         let _ = set.find_key("missing");
         let _ = set.signature_keys().len();
+        let _ = set.validate();
         roundtrip(&set);
     }
 });
