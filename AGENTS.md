@@ -29,7 +29,7 @@ Issues live in GitHub Issues on `impierce/openid-federation` (via the `gh` CLI).
 
 ### Triage labels
 
-Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+Default vocabulary, except that the `wontfix` role uses the existing `Wontfix` label: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `Wontfix`. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
