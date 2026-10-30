@@ -80,13 +80,13 @@ When a pull request implements a feature, change its status to ✅ in the same p
 
 ## Agent skills
 
-Coding agents in this repository use the skills of [mattpocock/skills](https://github.com/mattpocock/skills): the set its Claude Code plugin ships, from one release.
-They are committed rather than installed as a plugin, because cloud sessions of Claude Code don't install the plugins a repository enables.
+Coding agents in this repository use the skills of [mattpocock/skills](https://github.com/mattpocock/skills), installed the way its README describes for editable files: `npx skills@latest add mattpocock/skills`.
+They are committed rather than installed as a plugin, because cloud sessions of Claude Code don't install the plugins a repository enables, and the README advises against both at once.
 
 - `.agents/skills/` holds the skills; `.claude/skills/` holds one symlink per skill, which is where Claude Code reads them. On Windows, links need Developer Mode (or the *Create symbolic links* user right) and `core.symlinks` set before checkout: clone with `git clone -c core.symlinks=true <url>`, or set `git config --global core.symlinks true` first. In an existing clone, set `git config core.symlinks true`, then run `git checkout -- .claude/skills` to turn the plain files back into links.
-- `skills-lock.json` pins the release (`ref`) and a hash of every skill. The [`skills`](https://github.com/vercel-labs/skills) CLI writes it.
-- The `Agent skills` workflow checks for a new release every Monday and opens a pull request that installs it. Read the upstream changelog it links before merging; when an entry asks to re-run `/setup-matt-pocock-skills`, run it on that branch so `docs/agents/` follows the new templates.
-- To install a release by hand, run `scripts/update-agent-skills.sh <tag>`, for example `scripts/update-agent-skills.sh v1.3.2`. It needs Node.js, `curl` and `jq`.
+- `skills-lock.json`, written by the [`skills`](https://github.com/vercel-labs/skills) CLI, records each skill's source and a hash of its content; the CLI compares those against upstream to find updates.
+- To update, run `npx skills@latest update`. An update doesn't add skills that upstream has added since; re-run `npx skills@latest add mattpocock/skills` to pick them up.
+- The `Agent skills` workflow runs that update every Monday and opens a pull request when a skill changed. Read the upstream changelog before merging; when an entry asks to re-run `/setup-matt-pocock-skills`, run it on that branch so `docs/agents/` follows the new templates.
 
 Don't edit the skills in place: the next update overwrites them. Repository-specific guidance belongs in `AGENTS.md` and `docs/agents/`, which the skills read.
 

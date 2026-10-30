@@ -9,7 +9,7 @@
 - `CONTRIBUTING.md` lists the checks CI runs and the pull request conventions. Read it before writing a pull request title.
 - `docs/FEATURES.md` is the feature checklist against the specification. When a pull request implements a row, flip its status to ✅ in that pull request.
 - `GLOSSARY.md` is the domain language, in the specification's terms. Use its terms in code, tests, issues and pull requests.
-- The agent skills from [mattpocock/skills](https://github.com/mattpocock/skills) live in `.agents/skills/`, with a link per skill in `.claude/skills/`, installed by the [`skills`](https://github.com/vercel-labs/skills) CLI and pinned in `skills-lock.json`. They are upstream files: don't edit them. A scheduled workflow opens a pull request for each new release (`CONTRIBUTING.md`).
+- The agent skills from [mattpocock/skills](https://github.com/mattpocock/skills) live in `.agents/skills/`, with a link per skill in `.claude/skills/`, installed by the [`skills`](https://github.com/vercel-labs/skills) CLI and tracked in `skills-lock.json`. They are upstream files: don't edit them. A scheduled workflow opens a pull request when upstream changes them (`CONTRIBUTING.md`).
 
 ## Ground rules
 
@@ -29,7 +29,7 @@ Issues live in GitHub Issues on `impierce/openid-federation` (via the `gh` CLI).
 
 ### Triage labels
 
-Default vocabulary, except that the `wontfix` role uses the existing `Wontfix` label: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `Wontfix`. See `docs/agents/triage-labels.md`.
+Default vocabulary, except the `wontfix` role, which uses the existing `Wontfix` label. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
