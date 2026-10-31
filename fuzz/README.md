@@ -11,7 +11,7 @@ One file per target in [`fuzz_targets/`](fuzz_targets/); the doc comment at the 
 
 | Target             | Surface                                                                                                                              | Input                                              |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
-| `entity_statement` | `EntityConfiguration`, `SubordinateStatement`, `EntityMetadata` as JSON: parse, `validate`, `to_subordinate_statement`, round trip   | a JSON document                                    |
+| `entity_statement` | `EntityConfiguration`, `SubordinateStatement`, `EntityMetadata` as JSON: parse, `validate`, `SubordinateStatement::builder`, round trip | a JSON document                                    |
 | `jwt`              | `decode_header` and `typ` validation, `extract_claims_unverified`, `from_verified_jwt`, `TrustChain::try_new` over the input's lines | a compact JWT, or one JWT per line                 |
 | `trust_mark`       | `TrustMarkEntry::validate`; `TrustMark`, `TrustMarkIssuers`, `TrustMarkOwners` round trips                                           | a Trust Mark type on the first line, then the JWT; or JSON |
 | `jwk`              | `Jwk` and `JwkSet` JSON, conversion to `jsonwebtoken` keys, `kid` lookup, signature-key selection, round trip                        | a JWK or JWK Set as JSON                           |
