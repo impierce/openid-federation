@@ -222,10 +222,14 @@ impl SubordinateStatement {
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-1.2>)
 fn validate_entity_ids_for_signing(claims: &JwtClaims) -> FederationResult<()> {
     for (claim, entity_id) in [("iss", &claims.iss), ("sub", &claims.sub)] {
-        UrlValidator::validate_entity_id(entity_id.as_url())
-            .map_err(|err| FederationError::Configuration(format!("{claim} {entity_id}: {err}")))?;
+        validate_entity_id_for_signing(claim, entity_id)?;
     }
     Ok(())
+}
+
+fn validate_entity_id_for_signing(claim: &str, entity_id: &EntityId) -> FederationResult<()> {
+    UrlValidator::validate_entity_id(entity_id.as_url())
+        .map_err(|err| FederationError::Configuration(format!("{claim} {entity_id}: {err}")))
 }
 
 impl EntityConfiguration {
@@ -373,8 +377,9 @@ impl EntityConfiguration {
     /// `entity-statement+jwt` that names the key in `kid`.
     ///
     /// Before the signer is called, the configuration must pass [`EntityConfiguration::validate`]
-    /// and [`JwkSet::validate`], its Entity Identifier must use `https` and have no fragment, and
-    /// the signer's `kid` must name a key in the configuration's own `jwks`, since verifiers check
+    /// and [`JwkSet::validate`], its Entity Identifier and every Entity Identifier in
+    /// `authority_hints` and `trust_anchor_hints` must use `https` and have no fragment, and the
+    /// signer's `kid` must name a key in the configuration's own `jwks`, since verifiers check
     /// the self-signature against them. After signing, the result is
     /// verified the way a verifier does it, with [`EntityConfiguration::from_verified_jwt`], so a
     /// signer whose key is not the published key under that `kid` fails here rather than producing
@@ -391,6 +396,14 @@ impl EntityConfiguration {
     pub async fn sign(&self, signer: &dyn Signer) -> FederationResult<String> {
         self.validate()?;
         validate_entity_ids_for_signing(&self.claims)?;
+        for (claim, hints) in [
+            ("authority_hints", &self.authority_hints),
+            ("trust_anchor_hints", &self.trust_anchor_hints),
+        ] {
+            for entity_id in hints.iter().flatten() {
+                validate_entity_id_for_signing(claim, entity_id)?;
+            }
+        }
         self.jwks.validate()?;
         if !self
             .jwks

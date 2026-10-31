@@ -441,9 +441,14 @@ pub async fn sign_compact_jws<T: Serialize + ?Sized>(
             signer.kid()
         )));
     }
+    sign_payload(header, &serde_json::to_vec(claims)?, signer).await
+}
+
+/// Encodes `payload`, already serialized, under `header` and signs it with `signer`.
+async fn sign_payload(header: &Header, payload: &[u8], signer: &dyn Signer) -> FederationResult<String> {
     let mut token = URL_SAFE_NO_PAD.encode(serde_json::to_vec(header)?);
     token.push('.');
-    token.push_str(&URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims)?));
+    token.push_str(&URL_SAFE_NO_PAD.encode(payload));
     let signature = signer.sign(token.as_bytes()).await?;
     token.push('.');
     token.push_str(&URL_SAFE_NO_PAD.encode(signature));
@@ -480,11 +485,13 @@ pub async fn sign_federation_jwt<T: Serialize + ?Sized>(
             signer.alg()
         )));
     }
-    unique_top_level_members(&serde_json::to_vec(claims)?)?;
+    // The bytes checked for unique claim names are the bytes that get signed.
+    let payload = serde_json::to_vec(claims)?;
+    unique_top_level_members(&payload)?;
     let mut header = Header::new(signer.alg());
     header.typ = Some(artifact_type.header_value().to_string());
     header.kid = Some(signer.kid().to_string());
-    sign_compact_jws(&header, claims, signer).await
+    sign_payload(&header, &payload, signer).await
 }
 
 /// Checks that the JSON object `json` names each member once. A claim in an `additional` map

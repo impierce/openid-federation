@@ -436,6 +436,10 @@ async fn entity_configuration_sign_rejects_other_key_of_same_algorithm() {
     assert!(error.to_string().contains("does not verify"), "{error}");
 }
 
+fn http_anchor_hint() -> EntityId {
+    EntityId::parse("http://ta.example.org").unwrap()
+}
+
 #[tokio::test]
 async fn entity_identifiers_without_https_or_with_fragment_are_refused_when_signing() {
     let signer = Counting::new(InMemorySigner::from_der(Algorithm::ES256, "ta-key", EC_P256_DER).unwrap());
@@ -459,6 +463,29 @@ async fn entity_identifiers_without_https_or_with_fragment_are_refused_when_sign
         public_jwks(EC_P256_JWK, "op"),
     );
     assert!(statement.sign(&signer).await.is_err());
+
+    let http_subject = EntityId::parse("http://op.example.org").unwrap();
+    let statement = SubordinateStatement::new(
+        anchor_id.clone(),
+        http_subject.clone(),
+        now() + 3600,
+        now(),
+        public_jwks(EC_P256_JWK, "op"),
+    );
+    let error = statement.sign(&signer).await.unwrap_err();
+    assert!(error.to_string().contains("sub"), "{error}");
+
+    let leaf_id = EntityId::parse("https://op.example.org").unwrap();
+    for hints in ["authority_hints", "trust_anchor_hints"] {
+        let mut configuration =
+            EntityConfiguration::new(leaf_id.clone(), public_jwks(EC_P256_JWK, "ta-key"), now() + 3600, now());
+        match hints {
+            "authority_hints" => configuration.authority_hints = Some(vec![http_anchor_hint()]),
+            _ => configuration.trust_anchor_hints = Some(vec![http_anchor_hint()]),
+        }
+        let error = configuration.sign(&signer).await.unwrap_err();
+        assert!(error.to_string().contains(hints), "{error}");
+    }
 
     let with_fragment = EntityId::parse("https://op.example.org/#frag").unwrap();
     let statement = SubordinateStatement::new(
