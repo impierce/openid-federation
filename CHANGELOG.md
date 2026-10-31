@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/impierce/openid-federation/compare/v0.3.0...v0.4.0) - 2026-10-31
+
+### Added
+
+- *(entity)* [**breaking**] check Trust Anchor and Intermediate Entity Configuration rules ([#68](https://github.com/impierce/openid-federation/pull/68))
+- *(metadata)* [**breaking**] complete `federation_entity` metadata, check endpoints when signing ([#67](https://github.com/impierce/openid-federation/pull/67))
+- *(entity)* sign Entity Statements with `typ` and `kid` ([#66](https://github.com/impierce/openid-federation/pull/66))
+- *(jwt)* [**breaking**] sign through async `Signer` trait, add `InMemorySigner` ([#64](https://github.com/impierce/openid-federation/pull/64))
+- *(jwk)* [**breaking**] validate publishable JWK Sets, add RFC 7638 thumbprints ([#63](https://github.com/impierce/openid-federation/pull/63))
+
+### Fixed
+
+- [**breaking**] leave crypto backend of `jsonwebtoken` to application ([#26](https://github.com/impierce/openid-federation/pull/26))
+
 ## [0.3.0](https://github.com/impierce/openid-federation/compare/v0.2.0...v0.3.0) - 2026-10-27
 
 ### Fixed
