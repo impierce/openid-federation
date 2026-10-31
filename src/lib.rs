@@ -15,6 +15,7 @@
 
 #![warn(clippy::all)]
 
+pub mod endpoint;
 pub mod entity;
 pub mod error;
 pub mod jwk;
@@ -24,6 +25,7 @@ pub mod trust_chain;
 pub mod types;
 pub mod utils;
 
+pub use endpoint::*;
 pub use entity::*;
 pub use error::*;
 pub use jwk::{Jwk, JwkSet};

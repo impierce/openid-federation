@@ -1,6 +1,9 @@
 //! Utility functions for OpenID Federation operations.
 
-use crate::{EntityConfiguration, EntityId, FederationError, FederationResult, SubordinateStatement, TrustChain};
+use crate::{
+    EndpointError, EntityConfiguration, EntityId, ErrorResponse, FederationError, FederationResult,
+    SubordinateStatement, TrustChain,
+};
 use chrono::{Duration, Utc};
 use reqwest::Client;
 use std::collections::HashSet;
@@ -15,17 +18,61 @@ use async_trait::async_trait;
 ///
 /// This trait abstracts the HTTP layer to allow consumers to provide their own
 /// HTTP client implementation (e.g., alternative HTTP libraries, mock clients for testing).
-/// Implementations should fetch the given URL as text and return the response body or an error.
 #[async_trait]
 pub trait HttpClient: Send + Sync {
-    /// Fetch text content from the given URL.
+    /// Send a `GET` request to `url` and return the response, whatever its status.
     ///
-    /// # Arguments
-    /// * `url` - The URL to fetch from.
+    /// Return an error only when no response arrived (a network failure, for example).
+    /// [`FederationClient`] turns a status other than 2xx into [`FederationError::Endpoint`],
+    /// reading the error response of OpenID Federation 1.0,
+    /// [Section 8.9](https://openid.net/specs/openid-federation-1_0.html#section-8.9), from the
+    /// body.
+    async fn get(&self, url: Url) -> FederationResult<HttpResponse>;
+}
+
+/// A response as an [`HttpClient`] received it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct HttpResponse {
+    /// The HTTP status code.
+    pub status: u16,
+    /// The value of the `Content-Type` header, if the response had one.
+    pub content_type: Option<String>,
+    /// The response body.
+    pub body: String,
+}
+
+impl HttpResponse {
+    /// A response with the given status, content type and body.
+    pub fn new(status: u16, content_type: Option<String>, body: impl Into<String>) -> Self {
+        Self {
+            status,
+            content_type,
+            body: body.into(),
+        }
+    }
+
+    /// Whether the status is 2xx.
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+
+    /// The body of a 2xx response, or [`FederationError::Endpoint`] for any other status, with
+    /// the error response the body carries if it is one (Section 8.9).
     ///
-    /// # Returns
-    /// The response body as a string, or a `FederationError` on HTTP error or network failure.
-    async fn fetch_text(&self, url: Url) -> FederationResult<String>;
+    /// The error response is read from the body whatever the content type, since Section 8.9
+    /// only says the content type SHOULD be `application/json`.
+    pub fn into_success_body(self, url: Url) -> FederationResult<String> {
+        if self.is_success() {
+            return Ok(self.body);
+        }
+        Err(EndpointError {
+            url,
+            status: self.status,
+            response: serde_json::from_str::<ErrorResponse>(&self.body).ok(),
+        }
+        .into())
+    }
 }
 
 /// Default HTTP client implementation using `reqwest`.
@@ -53,17 +100,16 @@ impl Default for ReqwestHttpClient {
 
 #[async_trait]
 impl HttpClient for ReqwestHttpClient {
-    async fn fetch_text(&self, url: Url) -> FederationResult<String> {
-        let response = self.client.get(url.clone()).send().await?;
-
-        if !response.status().is_success() {
-            return Err(FederationError::EntityResolution(format!(
-                "Failed to fetch response from {url}: HTTP {}",
-                response.status()
-            )));
-        }
-
-        response.text().await.map_err(FederationError::from)
+    async fn get(&self, url: Url) -> FederationResult<HttpResponse> {
+        let response = self.client.get(url).send().await?;
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let body = response.text().await?;
+        Ok(HttpResponse::new(status, content_type, body))
     }
 }
 
@@ -126,7 +172,12 @@ impl FederationClient {
     /// <https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity->
     pub async fn fetch_entity_configuration(&self, entity_id: &EntityId) -> FederationResult<String> {
         let well_known_url = self.build_well_known_url(entity_id)?;
-        self.http_client.fetch_text(well_known_url).await
+        self.fetch_text(well_known_url).await
+    }
+
+    /// `GET` `url` and return the body of a 2xx response, or [`FederationError::Endpoint`].
+    async fn fetch_text(&self, url: Url) -> FederationResult<String> {
+        self.http_client.get(url.clone()).await?.into_success_body(url)
     }
 
     /// Fetch and authenticate the entity configuration of `entity_id`.
@@ -181,7 +232,7 @@ impl FederationClient {
         let mut url = federation_fetch_endpoint.clone();
         url.query_pairs_mut().append_pair("sub", subject.as_str());
 
-        self.http_client.fetch_text(url).await
+        self.fetch_text(url).await
     }
 
     /// Discover a trust chain from a leaf entity to a trusted anchor.
@@ -557,7 +608,7 @@ impl FederationClient {
     /// Reference: OpenID Federation 1.0 - Section 8.3 Federation List Endpoint
     /// <https://openid.net/specs/openid-federation-1_0.html#name-federation-list-endpoint>
     pub async fn list_entities(&self, list_endpoint: &Url) -> FederationResult<Vec<EntityId>> {
-        let response_text = self.http_client.fetch_text(list_endpoint.clone()).await?;
+        let response_text = self.fetch_text(list_endpoint.clone()).await?;
         let entity_list: Vec<String> = serde_json::from_str(&response_text)?;
         entity_list
             .into_iter()

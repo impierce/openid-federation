@@ -28,8 +28,9 @@ openid-federation/
 │   ├── jwk.rs           # Jwk, JwkSet and their conversion to jsonwebtoken keys
 │   ├── metadata.rs      # EntityMetadata and the metadata type of each entity type
 │   ├── types.rs         # EntityId, EntityType, TrustMarkEntry, TrustMark, TrustMarkIssuers, TrustMarkOwners, PolicyOperators, Constraints
-│   ├── utils.rs         # HttpClient, FederationClient (fetch, resolve, discover, list), TrustChainDiscovery, UrlValidator
-│   └── error.rs         # FederationError, FederationResult
+│   ├── utils.rs         # HttpClient, HttpResponse, FederationClient (fetch, resolve, discover, list), TrustChainDiscovery, UrlValidator
+│   ├── endpoint.rs      # EndpointResponse, ErrorCode, ErrorResponse (Section 8.9)
+│   └── error.rs         # FederationError, EndpointError, FederationResult
 ├── fuzz/                # cargo-fuzz targets; a workspace of its own
 └── docs/                # this document, FEATURES.md, RELEASE.md, adr/, agents/
 ```
@@ -56,11 +57,11 @@ A Trust Anchor or Intermediate Entity publishes its Entity Configuration, issues
 - **The `Signer` trait.** `alg()`, `kid()` and `async fn sign(signing_input)`, the same shape as `identity_kit::jose::Signer`, so the private key can live in memory, an HSM or a KMS. The crate's in-memory signer takes a DER-encoded private key and signs through `jsonwebtoken`, so the crypto backend stays the application's choice. Every signed artifact gets its `typ` from the artifact and its `kid` from the signer.
 - **Storage traits.** Registered subordinates, issued Trust Marks and the entity's keys are read and written through async traits that the application implements on its own database. In-memory implementations ship for tests, examples and small deployments.
 
-The relying side is unchanged by any of this, and a relying-only application pulls in no extra dependency. As the issuing-side issues land, the layout grows by:
+The relying side is unchanged by any of this, and a relying-only application pulls in no extra dependency. `endpoint.rs` already holds the response value every handler returns and the error responses; as the issuing-side issues land, the layout grows by:
 
 ```
 src/
-├── endpoint.rs   # the endpoint handlers, their request and response types, error responses (Section 8.9)
+├── endpoint.rs   # + the endpoint handlers and their request type
 ├── store.rs      # storage traits for subordinates and Trust Marks, with in-memory implementations
 └── keys.rs       # the entity's key set across rollover (Section 11.2), with an in-memory implementation
 ```
@@ -69,7 +70,12 @@ The `Signer` trait and the function that builds a compact JWS with it join the J
 
 ## Errors
 
-`FederationError` is one enum: wrapped `jsonwebtoken`, `serde_json`, `url` and `reqwest` errors, plus `InvalidSubordinateStatement`, `TrustChainValidation`, `EntityResolution`, `InvalidMetadata`, `MissingField`, `Configuration` and `InvalidJwtHeaderTyp`, each with a message that names the entity or claim involved. Discovery errors list the branch that failed, so a caller can act on them without parsing the message.
+`FederationError` is one `#[non_exhaustive]` enum: wrapped `jsonwebtoken`, `serde_json`, `url` and `reqwest` errors, plus `InvalidSubordinateStatement`, `TrustChainValidation`, `EntityResolution`, `InvalidMetadata`, `MissingField`, `Configuration`, `InvalidJwtHeaderTyp`, `Signing` and `Endpoint`, each with a message that names the entity or claim involved. Discovery errors list the branch that failed, so a caller can act on them without parsing the message.
+
+Federation endpoints answer errors with the error response of Section 8.9: `{ "error", "error_description" }` as `application/json`, with a recommended HTTP status per code. Both sides share one model in `endpoint.rs`:
+
+- **Serving.** `ErrorCode` has a variant per code the specification uses and `Other(String)` for any other, with `as_str` and the recommended `status`. An `ErrorResponse` converts into the `EndpointResponse` every handler returns: that status, `application/json` and the JSON body.
+- **Fetching.** `HttpClient::get` returns every response as an `HttpResponse` (status, content type, body) and errs only when no response arrived. `FederationClient` turns a status other than 2xx into `FederationError::Endpoint(EndpointError { url, status, response })`; `response` is the parsed `ErrorResponse`, or `None` when the body is not one, so the status is never lost. The body is read whatever its content type, since Section 8.9 only says it SHOULD be `application/json`.
 
 `InvalidSubordinateStatement` is also used for invalid Entity Configurations today. Splitting it is a breaking change and tracked in [`FEATURES.md`](FEATURES.md).
 

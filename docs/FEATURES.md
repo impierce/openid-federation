@@ -71,6 +71,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | Trust chain authentication top-down (`TrustChain::try_new`)                                          |   ✅   | [Validating a Trust Chain](https://openid.net/specs/openid-federation-1_0.html#trust_chain_validation)           |       |
 | Trust chain expiration (minimum `exp`)                                                               |   ✅   | [Calculating the Expiration Time of a Trust Chain](https://openid.net/specs/openid-federation-1_0.html#trust_lifetime) |       |
 | Injectable `HttpClient`; `reqwest` with `rustls` as the default                                       |   ✅   |                                                                                                                          |       |
+| Error responses: `ErrorCode`, `ErrorResponse` served as `EndpointResponse`, parsed into `FederationError::Endpoint` |   ✅   | [Error Responses](https://openid.net/specs/openid-federation-1_0.html#section-8.9)                                       | #36   |
 
 ## JOSE
 
