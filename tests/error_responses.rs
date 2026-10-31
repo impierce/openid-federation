@@ -166,3 +166,31 @@ async fn truncated_error_body_still_reports_the_status() {
     assert_eq!(error.status, 503);
     assert_eq!(error.response, None);
 }
+
+#[tokio::test]
+async fn oversized_error_body_is_discarded() {
+    // A valid error response padded past the 64 KiB limit: the client stops reading and does not
+    // parse what it read.
+    let body = format!(
+        "{}{}",
+        r#"{"error":"not_found","error_description":"Unknown subject"}"#,
+        " ".repeat(70 * 1024)
+    );
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/fetch"))
+        .respond_with(ResponseTemplate::new(404).set_body_raw(body, "application/json"))
+        .mount(&server)
+        .await;
+
+    let fetch_endpoint = Url::parse(&format!("{}/fetch", server.uri())).unwrap();
+    let subject = EntityId::parse("https://op.example.org").unwrap();
+    let error = FederationClient::new()
+        .fetch_subordinate_statement(&fetch_endpoint, &subject)
+        .await
+        .unwrap_err();
+
+    let error = endpoint_error(error);
+    assert_eq!(error.status, 404);
+    assert_eq!(error.response, None);
+}

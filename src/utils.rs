@@ -91,6 +91,9 @@ impl HttpResponse {
 }
 
 /// Default HTTP client implementation using `reqwest`.
+///
+/// The body of a response with a status other than 2xx is read up to 64 KiB; a longer body, or
+/// one that cannot be read, is returned empty, so [`FederationClient`] still reports the status.
 pub struct ReqwestHttpClient {
     client: Client,
 }
@@ -113,21 +116,39 @@ impl Default for ReqwestHttpClient {
     }
 }
 
+/// The most bytes [`ReqwestHttpClient`] reads from the body of a response with a status other
+/// than 2xx. An error response (Section 8.9) is a short JSON object; a longer body is discarded.
+const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+
+/// Reads the body of a response with a status other than 2xx, at most [`MAX_ERROR_BODY_BYTES`].
+/// A longer body, or one that fails to read (a truncated body, for example), yields an empty
+/// body, so the caller still reports the status. A truncated prefix is never returned, since it
+/// could still parse as an error response.
+async fn read_error_body(response: &mut reqwest::Response) -> String {
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if body.len() + chunk.len() <= MAX_ERROR_BODY_BYTES => body.extend_from_slice(&chunk),
+            Ok(Some(_)) | Err(_) => return String::new(),
+            Ok(None) => return String::from_utf8_lossy(&body).into_owned(),
+        }
+    }
+}
+
 #[async_trait]
 impl HttpClient for ReqwestHttpClient {
     async fn get(&self, url: Url) -> FederationResult<HttpResponse> {
-        let response = self.client.get(url).send().await?;
+        let mut response = self.client.get(url).send().await?;
         let status = response.status().as_u16();
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
-        let body = match response.text().await {
-            Ok(body) => body,
-            // A response arrived: an error response whose body cannot be read keeps its status.
-            Err(_) if !(200..300).contains(&status) => String::new(),
-            Err(error) => return Err(error.into()),
+        let body = if (200..300).contains(&status) {
+            response.text().await?
+        } else {
+            read_error_body(&mut response).await
         };
         Ok(HttpResponse::new(status, content_type, body))
     }
