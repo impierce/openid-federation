@@ -11,12 +11,18 @@ use std::fmt;
 
 /// The content type of an [`ErrorResponse`] and of the other JSON responses of the federation
 /// endpoints.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
 pub const JSON_CONTENT_TYPE: &str = "application/json";
 
 /// What a federation endpoint handler answers: the HTTP status, the content type and the body.
 ///
 /// An [`ErrorResponse`] converts into one with its recommended status and
 /// [`JSON_CONTENT_TYPE`].
+///
+/// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct EndpointResponse {
@@ -30,6 +36,9 @@ pub struct EndpointResponse {
 
 impl EndpointResponse {
     /// A response with the given status, content type and body.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
     pub fn new(status: u16, content_type: impl Into<String>, body: impl Into<String>) -> Self {
         Self {
             status,
@@ -50,6 +59,9 @@ impl From<ErrorResponse> for EndpointResponse {
 /// The codes the specification uses are variants; any other code, such as one from the IANA
 /// "OAuth Extensions Error Registry", is [`ErrorCode::Other`]. Parsing a code the specification
 /// uses always yields its variant, never `Other`.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     /// `invalid_request`: the request is incomplete or does not comply with the specification.
@@ -81,6 +93,9 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// The code as it is spelled on the wire.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
     pub fn as_str(&self) -> &str {
         match self {
             Self::InvalidRequest => "invalid_request",
@@ -103,6 +118,9 @@ impl ErrorCode {
     /// [`ErrorCode::Other`] has no recommended status and gets 400 (Bad Request); to answer with
     /// another status, build the [`EndpointResponse`] with
     /// [`ErrorResponse::to_endpoint_response_with_status`].
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
     pub fn status(&self) -> u16 {
         match self {
             Self::InvalidRequest
@@ -170,6 +188,9 @@ impl<'de> Deserialize<'de> for ErrorCode {
 /// `error_description` is REQUIRED, so it is always serialized. A response that omits it still
 /// parses, with an empty description, so a client keeps the error code of a server that leaves it
 /// out.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorResponse {
     /// The error code.
@@ -181,6 +202,9 @@ pub struct ErrorResponse {
 
 impl ErrorResponse {
     /// An error response with `error` and `error_description`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
     pub fn new(error: ErrorCode, error_description: impl Into<String>) -> Self {
         Self {
             error,
@@ -189,11 +213,17 @@ impl ErrorResponse {
     }
 
     /// The HTTP status Section 8.9 recommends for this error, see [`ErrorCode::status`].
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
     pub fn status(&self) -> u16 {
         self.error.status()
     }
 
     /// The JSON body of this error response.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
     pub fn to_json(&self) -> String {
         serde_json::json!({
             "error": self.error.as_str(),
@@ -203,12 +233,18 @@ impl ErrorResponse {
     }
 
     /// This error as an endpoint response with its recommended status.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
     pub fn to_endpoint_response(&self) -> EndpointResponse {
         self.to_endpoint_response_with_status(self.status())
     }
 
     /// This error as an endpoint response with `status`, such as 502 for a `server_error` caused
     /// by an upstream federation entity.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
     pub fn to_endpoint_response_with_status(&self, status: u16) -> EndpointResponse {
         EndpointResponse::new(status, JSON_CONTENT_TYPE, self.to_json())
     }

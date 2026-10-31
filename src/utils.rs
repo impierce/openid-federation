@@ -27,10 +27,16 @@ pub trait HttpClient: Send + Sync {
     /// reading the error response of OpenID Federation 1.0,
     /// [Section 8.9](https://openid.net/specs/openid-federation-1_0.html#section-8.9), from the
     /// body.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
     async fn get(&self, url: Url) -> FederationResult<HttpResponse>;
 }
 
 /// A response as an [`HttpClient`] received it.
+///
+/// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct HttpResponse {
@@ -44,6 +50,9 @@ pub struct HttpResponse {
 
 impl HttpResponse {
     /// A response with the given status, content type and body.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
     pub fn new(status: u16, content_type: Option<String>, body: impl Into<String>) -> Self {
         Self {
             status,
@@ -53,6 +62,9 @@ impl HttpResponse {
     }
 
     /// Whether the status is 2xx.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status)
     }
@@ -62,6 +74,9 @@ impl HttpResponse {
     ///
     /// The error response is read from the body whatever the content type, since Section 8.9
     /// only says the content type SHOULD be `application/json`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
     pub fn into_success_body(self, url: Url) -> FederationResult<String> {
         if self.is_success() {
             return Ok(self.body);
@@ -108,7 +123,12 @@ impl HttpClient for ReqwestHttpClient {
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
-        let body = response.text().await?;
+        let body = match response.text().await {
+            Ok(body) => body,
+            // A response arrived: an error response whose body cannot be read keeps its status.
+            Err(_) if !(200..300).contains(&status) => String::new(),
+            Err(error) => return Err(error.into()),
+        };
         Ok(HttpResponse::new(status, content_type, body))
     }
 }

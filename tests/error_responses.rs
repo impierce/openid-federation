@@ -43,7 +43,9 @@ async fn fetch_reads_the_error_response() {
 
     let error = endpoint_error(error);
     assert_eq!(error.status, 404);
-    assert_eq!(error.url.path(), "/fetch");
+    let mut expected_url = fetch_endpoint.clone();
+    expected_url.query_pairs_mut().append_pair("sub", subject.as_str());
+    assert_eq!(error.url, expected_url);
     assert_eq!(
         error.response,
         Some(ErrorResponse::new(
@@ -133,4 +135,34 @@ async fn custom_http_client_returns_every_status() {
         error.response.map(|response| response.error),
         Some(ErrorCode::InvalidClient)
     );
+}
+
+#[tokio::test]
+async fn truncated_error_body_still_reports_the_status() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // A server that promises a longer body than it sends, then closes the connection.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 1024];
+        let _ = socket.read(&mut request).await;
+        socket
+            .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"error\":")
+            .await
+            .unwrap();
+        socket.shutdown().await.unwrap();
+    });
+
+    let fetch_endpoint = Url::parse(&format!("http://{address}/fetch")).unwrap();
+    let subject = EntityId::parse("https://op.example.org").unwrap();
+    let error = FederationClient::new()
+        .fetch_subordinate_statement(&fetch_endpoint, &subject)
+        .await
+        .unwrap_err();
+
+    let error = endpoint_error(error);
+    assert_eq!(error.status, 503);
+    assert_eq!(error.response, None);
 }

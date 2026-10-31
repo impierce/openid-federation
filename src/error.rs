@@ -76,6 +76,9 @@ impl From<EndpointError> for FederationError {
 ///
 /// Federation endpoints answer errors with the error response of OpenID Federation 1.0,
 /// [Section 8.9](https://openid.net/specs/openid-federation-1_0.html#section-8.9).
+///
+/// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointError {
     /// The URL that was requested.
