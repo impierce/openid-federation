@@ -382,6 +382,7 @@ mod tests {
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
             federation_historical_keys_endpoint: None,
+            ..Default::default()
         });
 
         assert!(metadata.has_entity_type(&EntityType::FederationEntity));
@@ -839,6 +840,7 @@ mod tests {
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
             federation_historical_keys_endpoint: None,
+            ..Default::default()
         });
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
@@ -885,6 +887,7 @@ mod tests {
             federation_resolve_endpoint: Some(federation_url.as_url().join("resolve").unwrap()),
             federation_trust_mark_status_endpoint: None,
             federation_historical_keys_endpoint: None,
+            ..Default::default()
         });
 
         EntityConfiguration::new(entity_id, jwks, exp, iat).with_metadata(metadata)
@@ -1110,6 +1113,7 @@ mod tests {
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
             federation_historical_keys_endpoint: None,
+            ..Default::default()
         });
 
         let intermediate_config = EntityConfiguration::new(
@@ -1314,6 +1318,7 @@ mod tests {
                 federation_resolve_endpoint: None,
                 federation_trust_mark_status_endpoint: None,
                 federation_historical_keys_endpoint: None,
+                ..Default::default()
             });
             metadata
         })
@@ -1358,6 +1363,7 @@ mod tests {
                 federation_resolve_endpoint: None,
                 federation_trust_mark_status_endpoint: None,
                 federation_historical_keys_endpoint: None,
+                ..Default::default()
             });
             metadata
         })
@@ -1402,6 +1408,7 @@ mod tests {
                 federation_resolve_endpoint: None,
                 federation_trust_mark_status_endpoint: None,
                 federation_historical_keys_endpoint: None,
+                ..Default::default()
             });
             metadata
         });
@@ -1445,6 +1452,7 @@ mod tests {
                 federation_resolve_endpoint: None,
                 federation_trust_mark_status_endpoint: None,
                 federation_historical_keys_endpoint: None,
+                ..Default::default()
             });
             metadata
         });
@@ -1701,6 +1709,7 @@ mod tests {
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
             federation_historical_keys_endpoint: None,
+            ..Default::default()
         });
 
         let mut entity_b_metadata = EntityMetadata::new();
@@ -1719,6 +1728,7 @@ mod tests {
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
             federation_historical_keys_endpoint: None,
+            ..Default::default()
         });
 
         // Create Entity A that points to Entity B as authority and exposes a fetch endpoint.
@@ -1738,6 +1748,7 @@ mod tests {
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
             federation_historical_keys_endpoint: None,
+            ..Default::default()
         });
 
         let entity_a_config = EntityConfiguration::new(
@@ -1782,6 +1793,7 @@ mod tests {
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
             federation_historical_keys_endpoint: None,
+            ..Default::default()
         });
 
         let entity_b_config = EntityConfiguration::new(

@@ -617,12 +617,23 @@ impl UrlValidator {
         Ok(())
     }
 
-    /// Validate that a URL is suitable for use as an endpoint.
+    /// Validate that a URL is suitable for use as a federation endpoint: it uses `https`, has a
+    /// host and has no fragment.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 5.1.1 Federation Entity
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1.1>)
     pub fn validate_endpoint_url(url: &Url) -> FederationResult<()> {
         // Endpoint must use HTTPS
         if url.scheme() != "https" {
             return Err(FederationError::Configuration(
                 "Endpoint URL must use HTTPS scheme".to_string(),
+            ));
+        }
+
+        // Endpoint must not have a fragment
+        if url.fragment().is_some() {
+            return Err(FederationError::Configuration(
+                "Endpoint URL must not contain a fragment".to_string(),
             ));
         }
 

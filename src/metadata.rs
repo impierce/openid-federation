@@ -1,7 +1,7 @@
 //! Metadata structures for OpenID Federation entities.
 
 use crate::jwk::JwkSet;
-use crate::EntityType;
+use crate::{EntityType, FederationError, FederationResult, UrlValidator};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
@@ -12,7 +12,7 @@ use url::Url;
 /// <https://openid.net/specs/openid-federation-1_0.html#name-federation-entity> and
 /// Section 5.2.2 Informational Metadata Parameters
 /// <https://openid.net/specs/openid-federation-1_0.html#name-informational-metadata-para>
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FederationEntityMetadata {
     /// Organization name
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,6 +56,92 @@ pub struct FederationEntityMetadata {
     /// Federation historical keys endpoint
     #[serde(skip_serializing_if = "Option::is_none")]
     pub federation_historical_keys_endpoint: Option<Url>,
+    /// Trust Marked Entities Listing endpoint (Section 8.5)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federation_trust_mark_list_endpoint: Option<Url>,
+    /// Trust Mark endpoint (Section 8.6)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federation_trust_mark_endpoint: Option<Url>,
+    /// JWS `alg` values supported for `private_key_jwt` client authentication at the federation
+    /// endpoints (Section 8.8); `none` is not allowed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
+    /// Client authentication methods of the fetch endpoint (Section 8.8.1); absent means `["none"]`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federation_fetch_endpoint_auth_methods: Option<Vec<String>>,
+    /// Client authentication methods of the list endpoint (Section 8.8.1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federation_list_endpoint_auth_methods: Option<Vec<String>>,
+    /// Client authentication methods of the resolve endpoint (Section 8.8.1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federation_resolve_endpoint_auth_methods: Option<Vec<String>>,
+    /// Client authentication methods of the Trust Mark Status endpoint (Section 8.8.1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federation_trust_mark_status_endpoint_auth_methods: Option<Vec<String>>,
+    /// Client authentication methods of the Trust Marked Entities Listing endpoint (Section 8.8.1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federation_trust_mark_list_endpoint_auth_methods: Option<Vec<String>>,
+    /// Client authentication methods of the Trust Mark endpoint (Section 8.8.1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federation_trust_mark_endpoint_auth_methods: Option<Vec<String>>,
+    /// Client authentication methods of the historical keys endpoint (Section 8.8.1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federation_historical_keys_endpoint_auth_methods: Option<Vec<String>>,
+    /// Additional Federation Entity properties, which Section 5.1.1 allows; kept so they survive
+    /// a round trip
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
+}
+
+impl FederationEntityMetadata {
+    /// The federation endpoints this entity publishes, by metadata parameter name.
+    pub fn endpoints(&self) -> Vec<(&'static str, &Url)> {
+        [
+            ("federation_fetch_endpoint", &self.federation_fetch_endpoint),
+            ("federation_list_endpoint", &self.federation_list_endpoint),
+            ("federation_resolve_endpoint", &self.federation_resolve_endpoint),
+            (
+                "federation_trust_mark_status_endpoint",
+                &self.federation_trust_mark_status_endpoint,
+            ),
+            (
+                "federation_trust_mark_list_endpoint",
+                &self.federation_trust_mark_list_endpoint,
+            ),
+            ("federation_trust_mark_endpoint", &self.federation_trust_mark_endpoint),
+            (
+                "federation_historical_keys_endpoint",
+                &self.federation_historical_keys_endpoint,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(name, url)| url.as_ref().map(|url| (name, url)))
+        .collect()
+    }
+
+    /// Checks the rules Section 5.1.1 sets for these parameters: every federation endpoint uses
+    /// `https` and has no fragment, and `endpoint_auth_signing_alg_values_supported` does not
+    /// list `none`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 5.1.1 Federation Entity
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1.1>)
+    pub fn validate(&self) -> FederationResult<()> {
+        for (name, url) in self.endpoints() {
+            UrlValidator::validate_endpoint_url(url)
+                .map_err(|err| FederationError::InvalidMetadata(format!("{name} {url}: {err}")))?;
+        }
+        if self
+            .endpoint_auth_signing_alg_values_supported
+            .iter()
+            .flatten()
+            .any(|alg| alg == "none")
+        {
+            return Err(FederationError::InvalidMetadata(
+                "endpoint_auth_signing_alg_values_supported must not contain none".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// OpenID Connect Provider metadata.
@@ -454,5 +540,119 @@ mod tests {
         ] {
             assert!(!empty.has_entity_type(&entity_type), "{entity_type:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod federation_entity_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// OpenID Federation 1.0, Section 5.1.1, Figure 5, plus the `*_auth_methods` parameter of
+    /// Section 8.8.1, Figure 44.
+    fn example() -> serde_json::Value {
+        json!({
+            "federation_fetch_endpoint": "https://amanita.caesarea.example.com/federation_fetch",
+            "federation_list_endpoint": "https://amanita.caesarea.example.com/federation_list",
+            "federation_trust_mark_status_endpoint": "https://amanita.caesarea.example.com/status",
+            "federation_trust_mark_list_endpoint": "https://amanita.caesarea.example.com/trust_marked_list",
+            "organization_name": "Ovulo Mushroom",
+            "organization_uri": "https://amanita.caesarea.example.com",
+            "federation_trust_mark_endpoint_auth_methods": ["private_key_jwt"]
+        })
+    }
+
+    #[test]
+    fn specification_example_deserializes_with_every_member_typed() {
+        let metadata: FederationEntityMetadata = serde_json::from_value(example()).unwrap();
+        assert_eq!(
+            metadata.federation_trust_mark_list_endpoint.as_ref().map(Url::as_str),
+            Some("https://amanita.caesarea.example.com/trust_marked_list")
+        );
+        assert_eq!(
+            metadata.federation_trust_mark_endpoint_auth_methods,
+            Some(vec!["private_key_jwt".to_string()])
+        );
+        assert!(metadata.additional.is_empty(), "{:?}", metadata.additional);
+        metadata.validate().unwrap();
+        assert_round_trip(&metadata);
+    }
+
+    /// `Url` writes a host-only URL with a trailing `/`, so the comparison is on parsed values.
+    fn assert_round_trip(metadata: &FederationEntityMetadata) {
+        let again: FederationEntityMetadata = serde_json::from_value(serde_json::to_value(metadata).unwrap()).unwrap();
+        assert_eq!(&again, metadata);
+    }
+
+    #[test]
+    fn every_endpoint_and_auth_parameter_is_typed() {
+        let mut value = json!({ "endpoint_auth_signing_alg_values_supported": ["ES256", "RS256"] });
+        for endpoint in [
+            "federation_fetch_endpoint",
+            "federation_list_endpoint",
+            "federation_resolve_endpoint",
+            "federation_trust_mark_status_endpoint",
+            "federation_trust_mark_list_endpoint",
+            "federation_trust_mark_endpoint",
+            "federation_historical_keys_endpoint",
+        ] {
+            value[endpoint] = json!(format!("https://ta.example.org/{endpoint}"));
+            value[format!("{endpoint}_auth_methods")] = json!(["none"]);
+        }
+        let metadata: FederationEntityMetadata = serde_json::from_value(value.clone()).unwrap();
+        assert!(metadata.additional.is_empty(), "{:?}", metadata.additional);
+        assert_eq!(metadata.endpoints().len(), 7);
+        metadata.validate().unwrap();
+        assert_eq!(serde_json::to_value(&metadata).unwrap(), value);
+    }
+
+    #[test]
+    fn additional_properties_round_trip() {
+        let mut value = example();
+        value["ecosystem_profile"] = json!({ "version": 2, "tags": ["a", "b"] });
+        let metadata: FederationEntityMetadata = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(metadata.additional["ecosystem_profile"]["version"], json!(2));
+        assert_round_trip(&metadata);
+        assert_eq!(
+            serde_json::to_value(&metadata).unwrap()["ecosystem_profile"],
+            value["ecosystem_profile"]
+        );
+    }
+
+    fn with_fetch_endpoint(url: &str) -> FederationEntityMetadata {
+        FederationEntityMetadata {
+            federation_fetch_endpoint: Some(Url::parse(url).unwrap()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn endpoint_with_fragment_fails() {
+        let error = with_fetch_endpoint("https://ta.example.org/fetch#frag")
+            .validate()
+            .unwrap_err();
+        assert!(error.to_string().contains("federation_fetch_endpoint"), "{error}");
+        assert!(UrlValidator::validate_endpoint_url(&Url::parse("https://ta.example.org/x#frag").unwrap()).is_err());
+    }
+
+    #[test]
+    fn endpoint_with_port_path_and_query_passes() {
+        with_fetch_endpoint("https://ta.example.org:8443/federation/fetch?tenant=1")
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn endpoint_without_https_fails() {
+        assert!(with_fetch_endpoint("http://ta.example.org/fetch").validate().is_err());
+    }
+
+    #[test]
+    fn none_as_endpoint_auth_signing_alg_fails() {
+        let metadata = FederationEntityMetadata {
+            endpoint_auth_signing_alg_values_supported: Some(vec!["ES256".to_string(), "none".to_string()]),
+            ..Default::default()
+        };
+        assert!(metadata.validate().is_err());
     }
 }
