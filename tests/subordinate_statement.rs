@@ -108,6 +108,21 @@ fn crit_follows_the_producer_rules() {
     }
 }
 
+#[tokio::test]
+async fn extension_claims_never_take_a_specified_name() {
+    // A `crit` passed as an extension claim would skip the `crit` rules above.
+    for name in ["crit", "metadata_policy", "jwks", "exp"] {
+        let error = about_leaf().extension_claim(name, json!(["jwks"])).build().unwrap_err();
+        assert!(error.to_string().contains("specification defines"), "{name}: {error}");
+    }
+
+    let signer = InMemorySigner::from_der(Algorithm::ES256, "ta-key", EC_P256_DER).unwrap();
+    let mut statement = about_leaf().build().unwrap();
+    statement.claims.additional.insert("crit".to_string(), json!(["jwks"]));
+    let error = statement.sign(&signer).await.unwrap_err();
+    assert!(error.to_string().contains("specification defines"), "{error}");
+}
+
 #[test]
 fn metadata_policy_crit_follows_the_producer_rules() {
     for (operators, expected) in [

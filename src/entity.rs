@@ -245,6 +245,7 @@ impl SubordinateStatement {
     /// The rules a producer of a Subordinate Statement follows, on top of
     /// [`SubordinateStatement::validate`]:
     ///
+    /// - No extension claim takes a name this specification or RFC 7519 defines.
     /// - `crit` is not `[]`, has no duplicates, names no claim this specification or RFC 7519
     ///   defines, and names only extension claims present in the statement (Section 13.4).
     /// - `metadata_policy_crit` is not `[]`, has no duplicates and names none of the standard
@@ -255,6 +256,19 @@ impl SubordinateStatement {
     /// They are producer rules, so they run when the crate builds or signs a statement, not on
     /// statements fetched from other entities.
     fn validate_for_issuing(&self) -> FederationResult<()> {
+        // An extension claim never takes a name the specification defines: `crit` or
+        // `metadata_policy` among the extension claims would bypass the checks below.
+        if let Some(name) = self
+            .claims
+            .additional
+            .keys()
+            .find(|name| SPECIFIED_ENTITY_STATEMENT_CLAIMS.contains(&name.as_str()))
+        {
+            return Err(FederationError::InvalidSubordinateStatement(format!(
+                "extension claim {name:?} is a claim the specification defines"
+            )));
+        }
+
         if let Some(crit) = &self.crit {
             validate_claim_name_list("crit", crit)?;
             for name in crit {
@@ -465,7 +479,8 @@ impl SubordinateStatementBuilder {
         self
     }
 
-    /// An extension claim, one this specification does not define. Name it in
+    /// An extension claim, one this specification does not define: [`build`](Self::build)
+    /// rejects a name the specification or RFC 7519 defines, such as `crit`. Name the claim in
     /// [`crit`](Self::crit) if verifiers must understand it.
     pub fn extension_claim(mut self, name: impl Into<String>, value: serde_json::Value) -> Self {
         self.extension_claims.insert(name.into(), value);
