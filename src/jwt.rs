@@ -441,13 +441,90 @@ pub async fn sign_compact_jws<T: Serialize + ?Sized>(
             signer.kid()
         )));
     }
+    sign_payload(header, &serde_json::to_vec(claims)?, signer).await
+}
+
+/// Encodes `payload`, already serialized, under `header` and signs it with `signer`.
+async fn sign_payload(header: &Header, payload: &[u8], signer: &dyn Signer) -> FederationResult<String> {
     let mut token = URL_SAFE_NO_PAD.encode(serde_json::to_vec(header)?);
     token.push('.');
-    token.push_str(&URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims)?));
+    token.push_str(&URL_SAFE_NO_PAD.encode(payload));
     let signature = signer.sign(token.as_bytes()).await?;
     token.push('.');
     token.push_str(&URL_SAFE_NO_PAD.encode(signature));
     Ok(token)
+}
+
+/// Signs `claims` as a federation artifact of `artifact_type`: a compact JWS whose `typ` is the
+/// artifact's media type and whose `kid` names the signer's key, as every federation artifact
+/// requires.
+///
+/// This is the one signing path the artifact types share: Entity Configurations and Subordinate
+/// Statements call it from their `sign` methods after their own checks.
+///
+/// # Errors
+///
+/// [`FederationError::Configuration`] when the signer has an empty `kid`, and the errors of
+/// [`sign_compact_jws`].
+///
+/// Reference: OpenID Federation 1.0 - Section 3 Entity Statement
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-3>)
+pub async fn sign_federation_jwt<T: Serialize + ?Sized>(
+    claims: &T,
+    artifact_type: JwtArtifactType,
+    signer: &dyn Signer,
+) -> FederationResult<String> {
+    if signer.kid().is_empty() {
+        return Err(FederationError::Configuration(
+            "a federation artifact must name its signing key, but the signer's kid is empty".to_string(),
+        ));
+    }
+    if signer.alg().family() == AlgorithmFamily::Hmac {
+        return Err(FederationError::Configuration(format!(
+            "{:?} is symmetric; federation artifacts are signed with a Federation Entity Key, a public/private key pair",
+            signer.alg()
+        )));
+    }
+    // The bytes checked for unique claim names are the bytes that get signed.
+    let payload = serde_json::to_vec(claims)?;
+    unique_top_level_members(&payload)?;
+    let mut header = Header::new(signer.alg());
+    header.typ = Some(artifact_type.header_value().to_string());
+    header.kid = Some(signer.kid().to_string());
+    sign_payload(&header, &payload, signer).await
+}
+
+/// Checks that the JSON object `json` names each member once. A claim in an `additional` map
+/// that repeats a typed claim, such as `iss`, would otherwise be serialized twice, and RFC 7519
+/// Section 4 requires unique claim names.
+fn unique_top_level_members(json: &[u8]) -> FederationResult<()> {
+    struct UniqueMembers;
+
+    impl<'de> serde::de::Visitor<'de> for UniqueMembers {
+        type Value = ();
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+            let mut seen = std::collections::HashSet::new();
+            while let Some(name) = map.next_key::<String>()? {
+                map.next_value::<serde::de::IgnoredAny>()?;
+                if !seen.insert(name.clone()) {
+                    return Err(serde::de::Error::custom(format!(
+                        "claim {name:?} appears more than once"
+                    )));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    use serde::Deserializer as _;
+    serde_json::Deserializer::from_slice(json)
+        .deserialize_map(UniqueMembers)
+        .map_err(|err| FederationError::Configuration(format!("cannot sign the claims: {err}")))
 }
 
 /// A [`Signer`] over a private key held in memory, signing through `jsonwebtoken`.
