@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::{
-    extract_claims_unverified, Constraints, EntityId, EntityMetadata, FederationError, FederationResult, JwkSet,
-    JwtArtifactType, JwtClaims, JwtProcessor, PolicyOperators, TrustMarkEntry, TrustMarkIssuers, TrustMarkOwners,
+    extract_claims_unverified, sign_federation_jwt, Constraints, EntityId, EntityMetadata, FederationError,
+    FederationResult, JwkSet, JwtArtifactType, JwtClaims, JwtProcessor, PolicyOperators, Signer, TrustMarkEntry,
+    TrustMarkIssuers, TrustMarkOwners, UrlValidator,
 };
 
 /// Subordinate Statement as defined in the OpenID Federation specification.
@@ -188,6 +189,49 @@ impl SubordinateStatement {
     }
 }
 
+impl SubordinateStatement {
+    /// Signs this statement with `signer`, a key of the issuer (`iss`), as an
+    /// `entity-statement+jwt` that names the key in `kid`.
+    ///
+    /// The statement is checked before the signer is called: [`SubordinateStatement::validate`],
+    /// `iss` and `sub` as `https` Entity Identifiers without a fragment, and [`JwkSet::validate`] on
+    /// `jwks`, so the subject's keys are published only as public keys
+    /// with unique `kid`s. Whether the signer's key is one the issuer publishes cannot be checked
+    /// here; verifiers check it against the issuer's authenticated keys.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the two checks above, and of [`sign_federation_jwt`].
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 3 Entity Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-3>) and Section 3.1.1
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-3.1.1>)
+    pub async fn sign(&self, signer: &dyn Signer) -> FederationResult<String> {
+        self.validate()?;
+        validate_entity_ids_for_signing(&self.claims)?;
+        self.jwks.validate()?;
+        sign_federation_jwt(self, JwtArtifactType::EntityStatement, signer).await
+    }
+}
+
+/// Checks `iss` and `sub` of a statement this crate is about to sign: each Entity Identifier uses
+/// `https`, has a host and has no fragment. The check runs when signing only; statements fetched
+/// from other entities are not held to it.
+///
+/// Reference: OpenID Federation 1.0 - Section 1.2 Terminology, Entity Identifier
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-1.2>)
+fn validate_entity_ids_for_signing(claims: &JwtClaims) -> FederationResult<()> {
+    for (claim, entity_id) in [("iss", &claims.iss), ("sub", &claims.sub)] {
+        validate_entity_id_for_signing(claim, entity_id)?;
+    }
+    Ok(())
+}
+
+fn validate_entity_id_for_signing(claim: &str, entity_id: &EntityId) -> FederationResult<()> {
+    UrlValidator::validate_entity_id(entity_id.as_url())
+        .map_err(|err| FederationError::Configuration(format!("{claim} {entity_id}: {err}")))
+}
+
 impl EntityConfiguration {
     pub fn new(entity_id: EntityId, jwks: JwkSet, exp: i64, iat: i64) -> Self {
         let claims = JwtClaims {
@@ -327,6 +371,59 @@ impl EntityConfiguration {
         // TODO: Validate `crit` if present according to the specification.
 
         Ok(())
+    }
+
+    /// Signs this Entity Configuration with `signer`, one of the entity's own keys, as an
+    /// `entity-statement+jwt` that names the key in `kid`.
+    ///
+    /// Before the signer is called, the configuration must pass [`EntityConfiguration::validate`]
+    /// and [`JwkSet::validate`], its Entity Identifier and every Entity Identifier in
+    /// `authority_hints` and `trust_anchor_hints` must use `https` and have no fragment, and the
+    /// signer's `kid` must name a key in the configuration's own `jwks`, since verifiers check
+    /// the self-signature against them. After signing, the result is
+    /// verified the way a verifier does it, with [`EntityConfiguration::from_verified_jwt`], so a
+    /// signer whose key is not the published key under that `kid` fails here rather than producing
+    /// a configuration nobody can verify.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the checks above, [`FederationError::Configuration`] for a `kid` that is not
+    /// in `jwks`, and the errors of [`sign_federation_jwt`].
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 3 Entity Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-3>) and Section 3.2.1
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-3.2.1>)
+    pub async fn sign(&self, signer: &dyn Signer) -> FederationResult<String> {
+        self.validate()?;
+        validate_entity_ids_for_signing(&self.claims)?;
+        for (claim, hints) in [
+            ("authority_hints", &self.authority_hints),
+            ("trust_anchor_hints", &self.trust_anchor_hints),
+        ] {
+            for entity_id in hints.iter().flatten() {
+                validate_entity_id_for_signing(claim, entity_id)?;
+            }
+        }
+        self.jwks.validate()?;
+        if !self
+            .jwks
+            .keys
+            .iter()
+            .any(|key| key.kid.as_deref() == Some(signer.kid()))
+        {
+            return Err(FederationError::Configuration(format!(
+                "the signer's kid {:?} is not a key in the Entity Configuration's own jwks",
+                signer.kid()
+            )));
+        }
+        let jwt = sign_federation_jwt(self, JwtArtifactType::EntityStatement, signer).await?;
+        EntityConfiguration::from_verified_jwt(&jwt, &self.claims.sub).map_err(|err| {
+            FederationError::Configuration(format!(
+                "the Entity Configuration signed with {:?} does not verify against its own jwks: {err}",
+                signer.kid()
+            ))
+        })?;
+        Ok(jwt)
     }
 
     /// Convert this entity configuration to an subordinate statement. All new fields in the subordinate statement will be set to None.
