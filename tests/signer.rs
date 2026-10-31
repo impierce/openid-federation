@@ -420,3 +420,56 @@ async fn additional_claim_repeating_a_typed_claim_is_refused() {
 
     assert_eq!(signer.calls(), 0, "the signer must not be called");
 }
+
+const EC_P256_OTHER_DER: &[u8] = include_bytes!("data/signer/ec-p256-other.pkcs8.der");
+
+#[tokio::test]
+async fn entity_configuration_sign_rejects_other_key_of_same_algorithm() {
+    // Same algorithm and published `kid`, but another P-256 key than the one in `jwks`.
+    let entity_id = EntityId::parse("https://ta.example.org").unwrap();
+    let signer = InMemorySigner::from_der(Algorithm::ES256, "ta-key", EC_P256_OTHER_DER).unwrap();
+    let configuration = EntityConfiguration::new(entity_id, public_jwks(EC_P256_JWK, "ta-key"), now() + 3600, now());
+
+    let error = configuration.sign(&signer).await.unwrap_err();
+
+    assert!(matches!(error, FederationError::Configuration(_)), "{error:?}");
+    assert!(error.to_string().contains("does not verify"), "{error}");
+}
+
+#[tokio::test]
+async fn entity_identifiers_without_https_or_with_fragment_are_refused_when_signing() {
+    let signer = Counting::new(InMemorySigner::from_der(Algorithm::ES256, "ta-key", EC_P256_DER).unwrap());
+    let anchor_id = EntityId::parse("https://ta.example.org").unwrap();
+
+    let http_anchor = EntityId::parse("http://ta.example.org").unwrap();
+    let configuration = EntityConfiguration::new(
+        http_anchor.clone(),
+        public_jwks(EC_P256_JWK, "ta-key"),
+        now() + 3600,
+        now(),
+    );
+    let error = configuration.sign(&signer).await.unwrap_err();
+    assert!(error.to_string().contains("HTTPS"), "{error}");
+
+    let statement = SubordinateStatement::new(
+        http_anchor,
+        anchor_id.clone(),
+        now() + 3600,
+        now(),
+        public_jwks(EC_P256_JWK, "op"),
+    );
+    assert!(statement.sign(&signer).await.is_err());
+
+    let with_fragment = EntityId::parse("https://op.example.org/#frag").unwrap();
+    let statement = SubordinateStatement::new(
+        anchor_id,
+        with_fragment,
+        now() + 3600,
+        now(),
+        public_jwks(EC_P256_JWK, "op"),
+    );
+    let error = statement.sign(&signer).await.unwrap_err();
+    assert!(error.to_string().contains("fragment"), "{error}");
+
+    assert_eq!(signer.calls(), 0, "the signer must not be called");
+}

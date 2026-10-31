@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use crate::{
     extract_claims_unverified, sign_federation_jwt, Constraints, EntityId, EntityMetadata, FederationError,
     FederationResult, JwkSet, JwtArtifactType, JwtClaims, JwtProcessor, PolicyOperators, Signer, TrustMarkEntry,
-    TrustMarkIssuers, TrustMarkOwners,
+    TrustMarkIssuers, TrustMarkOwners, UrlValidator,
 };
 
 /// Subordinate Statement as defined in the OpenID Federation specification.
@@ -194,7 +194,8 @@ impl SubordinateStatement {
     /// `entity-statement+jwt` that names the key in `kid`.
     ///
     /// The statement is checked before the signer is called: [`SubordinateStatement::validate`],
-    /// and [`JwkSet::validate`] on `jwks`, so the subject's keys are published only as public keys
+    /// `iss` and `sub` as `https` Entity Identifiers without a fragment, and [`JwkSet::validate`] on
+    /// `jwks`, so the subject's keys are published only as public keys
     /// with unique `kid`s. Whether the signer's key is one the issuer publishes cannot be checked
     /// here; verifiers check it against the issuer's authenticated keys.
     ///
@@ -207,9 +208,24 @@ impl SubordinateStatement {
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-3.1.1>)
     pub async fn sign(&self, signer: &dyn Signer) -> FederationResult<String> {
         self.validate()?;
+        validate_entity_ids_for_signing(&self.claims)?;
         self.jwks.validate()?;
         sign_federation_jwt(self, JwtArtifactType::EntityStatement, signer).await
     }
+}
+
+/// Checks `iss` and `sub` of a statement this crate is about to sign: each Entity Identifier uses
+/// `https`, has a host and has no fragment. The check runs when signing only; statements fetched
+/// from other entities are not held to it.
+///
+/// Reference: OpenID Federation 1.0 - Section 1.2 Terminology, Entity Identifier
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-1.2>)
+fn validate_entity_ids_for_signing(claims: &JwtClaims) -> FederationResult<()> {
+    for (claim, entity_id) in [("iss", &claims.iss), ("sub", &claims.sub)] {
+        UrlValidator::validate_entity_id(entity_id.as_url())
+            .map_err(|err| FederationError::Configuration(format!("{claim} {entity_id}: {err}")))?;
+    }
+    Ok(())
 }
 
 impl EntityConfiguration {
@@ -357,8 +373,9 @@ impl EntityConfiguration {
     /// `entity-statement+jwt` that names the key in `kid`.
     ///
     /// Before the signer is called, the configuration must pass [`EntityConfiguration::validate`]
-    /// and [`JwkSet::validate`], and the signer's `kid` must name a key in the configuration's own
-    /// `jwks`, since verifiers check the self-signature against them. After signing, the result is
+    /// and [`JwkSet::validate`], its Entity Identifier must use `https` and have no fragment, and
+    /// the signer's `kid` must name a key in the configuration's own `jwks`, since verifiers check
+    /// the self-signature against them. After signing, the result is
     /// verified the way a verifier does it, with [`EntityConfiguration::from_verified_jwt`], so a
     /// signer whose key is not the published key under that `kid` fails here rather than producing
     /// a configuration nobody can verify.
@@ -373,6 +390,7 @@ impl EntityConfiguration {
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-3.2.1>)
     pub async fn sign(&self, signer: &dyn Signer) -> FederationResult<String> {
         self.validate()?;
+        validate_entity_ids_for_signing(&self.claims)?;
         self.jwks.validate()?;
         if !self
             .jwks
