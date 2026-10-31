@@ -538,7 +538,11 @@ async fn federation_entity_endpoints_are_checked_when_signing() {
             public_jwks(EC_P256_JWK, "op-key"),
         );
         statement.metadata = Some(federation_entity(bad));
-        assert!(statement.sign(&signer).await.is_err(), "{bad}");
+        let error = statement.sign(&signer).await.unwrap_err();
+        assert!(
+            error.to_string().contains("federation_fetch_endpoint"),
+            "{bad}: {error}"
+        );
     }
     assert_eq!(signer.calls(), 0, "the signer must not be called");
 
