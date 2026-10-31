@@ -1,8 +1,9 @@
 //! Subordinate Statement and Entity Configuration structures.
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use url::Url;
 
 use crate::{
     extract_claims_unverified, sign_federation_jwt, Constraints, EntityId, EntityMetadata, FederationError,
@@ -210,19 +211,313 @@ impl SubordinateStatement {
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-3.1.1>)
     pub async fn sign(&self, signer: &dyn Signer) -> FederationResult<String> {
         self.validate()?;
+        self.validate_for_issuing()?;
         validate_entity_ids_for_signing(&self.claims)?;
         validate_federation_entity_for_signing(self.metadata.as_ref())?;
         self.jwks.validate()?;
         sign_federation_jwt(self, JwtArtifactType::EntityStatement, signer).await
     }
+
+    /// Starts a [`SubordinateStatementBuilder`] for a statement that `issuer`, a Superior, issues
+    /// about `subject`, one of its Immediate Subordinates. `jwks` are the subject's Federation
+    /// Entity Keys as the Superior registered them, not the keys the subject publishes in its own
+    /// Entity Configuration and not the Superior's own keys.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 3.1.1
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-3.1.1>)
+    pub fn builder(issuer: EntityId, subject: EntityId, jwks: JwkSet) -> SubordinateStatementBuilder {
+        SubordinateStatementBuilder {
+            issuer,
+            subject,
+            jwks,
+            issued_at: None,
+            expiry: None,
+            metadata: None,
+            metadata_policy: None,
+            metadata_policy_crit: None,
+            constraints: None,
+            source_endpoint: None,
+            crit: None,
+            extension_claims: HashMap::new(),
+        }
+    }
+
+    /// The rules a producer of a Subordinate Statement follows, on top of
+    /// [`SubordinateStatement::validate`]:
+    ///
+    /// - `crit` is not `[]`, has no duplicates, names no claim this specification or RFC 7519
+    ///   defines, and names only extension claims present in the statement (Section 13.4).
+    /// - `metadata_policy_crit` is not `[]`, has no duplicates and names none of the standard
+    ///   policy operators (Sections 3.1.3 and 6.1.3.1).
+    /// - `source_endpoint` is an `https` URL with a host and without a fragment (Sections 3.1.3
+    ///   and 8.1).
+    ///
+    /// They are producer rules, so they run when the crate builds or signs a statement, not on
+    /// statements fetched from other entities.
+    fn validate_for_issuing(&self) -> FederationResult<()> {
+        if let Some(crit) = &self.crit {
+            validate_claim_name_list("crit", crit)?;
+            for name in crit {
+                if SPECIFIED_ENTITY_STATEMENT_CLAIMS.contains(&name.as_str()) {
+                    return Err(FederationError::InvalidSubordinateStatement(format!(
+                        "crit must not name {name:?}, a claim the specification defines"
+                    )));
+                }
+                if !self.claims.additional.contains_key(name) {
+                    return Err(FederationError::InvalidSubordinateStatement(format!(
+                        "crit names {name:?}, which is not a claim of the statement"
+                    )));
+                }
+            }
+        }
+
+        if let Some(operators) = &self.metadata_policy_crit {
+            validate_claim_name_list("metadata_policy_crit", operators)?;
+            if let Some(operator) = operators
+                .iter()
+                .find(|operator| STANDARD_POLICY_OPERATORS.contains(&operator.as_str()))
+            {
+                return Err(FederationError::InvalidSubordinateStatement(format!(
+                    "metadata_policy_crit must not name {operator:?}, a standard policy operator"
+                )));
+            }
+        }
+
+        if let Some(source_endpoint) = &self.source_endpoint {
+            Url::parse(source_endpoint)
+                .map_err(|err| err.to_string())
+                .and_then(|url| UrlValidator::validate_endpoint_url(&url).map_err(|err| err.to_string()))
+                .map_err(|err| {
+                    FederationError::InvalidSubordinateStatement(format!(
+                        "source_endpoint {source_endpoint:?} is not a valid endpoint URL: {err}"
+                    ))
+                })?;
+        }
+
+        Ok(())
+    }
 }
 
-/// Checks `iss` and `sub` of a statement this crate is about to sign: each Entity Identifier uses
-/// `https`, has a host and has no fragment. The check runs when signing only; statements fetched
-/// from other entities are not held to it.
+/// The claim names this specification (Section 3.1) and RFC 7519 (Section 4.1) define for Entity
+/// Statements. A producer never lists them in `crit` (Section 13.4).
+const SPECIFIED_ENTITY_STATEMENT_CLAIMS: &[&str] = &[
+    "iss",
+    "sub",
+    "aud",
+    "exp",
+    "nbf",
+    "iat",
+    "jti",
+    "jwks",
+    "metadata",
+    "crit",
+    "authority_hints",
+    "trust_anchor_hints",
+    "trust_marks",
+    "trust_mark_issuers",
+    "trust_mark_owners",
+    "constraints",
+    "metadata_policy",
+    "metadata_policy_crit",
+    "source_endpoint",
+    "trust_anchor",
+];
+
+/// The standard metadata policy operators (Section 6.1.3.1). `metadata_policy_crit` lists only
+/// operators other than these.
+const STANDARD_POLICY_OPERATORS: &[&str] = &[
+    "value",
+    "add",
+    "default",
+    "one_of",
+    "subset_of",
+    "superset_of",
+    "essential",
+];
+
+/// `crit` and `metadata_policy_crit` are never the empty array and never list a name twice.
+fn validate_claim_name_list(claim: &str, names: &[String]) -> FederationResult<()> {
+    if names.is_empty() {
+        return Err(FederationError::InvalidSubordinateStatement(format!(
+            "{claim} must not be the empty array"
+        )));
+    }
+    let mut seen = HashSet::new();
+    if let Some(duplicate) = names.iter().find(|name| !seen.insert(name.as_str())) {
+        return Err(FederationError::InvalidSubordinateStatement(format!(
+            "{claim} lists {duplicate:?} more than once"
+        )));
+    }
+    Ok(())
+}
+
+/// When a statement built with [`SubordinateStatementBuilder`] expires.
+#[derive(Debug, Clone, Copy)]
+enum Expiry {
+    At(i64),
+    After(Duration),
+}
+
+/// Builds a [`SubordinateStatement`] from what a Superior registered about one of its Immediate
+/// Subordinates. Start one with [`SubordinateStatement::builder`].
 ///
-/// Reference: OpenID Federation 1.0 - Section 1.2 Terminology, Entity Identifier
-/// (<https://openid.net/specs/openid-federation-1_0.html#section-1.2>)
+/// Everything in the statement comes from the Superior: `iss` is the Superior, `jwks` are the
+/// subject's keys as the Superior registered them, `iat` and `exp` are the Superior's choice, and
+/// `metadata` holds only the values the Superior overrides. Nothing is copied from the subject's
+/// Entity Configuration.
+///
+/// ```
+/// use chrono::Duration;
+/// use openid_federation::{EntityId, Jwk, JwkSet, SubordinateStatement};
+///
+/// let mut key: Jwk = serde_json::from_value(serde_json::json!({
+///     "kty": "EC",
+///     "crv": "P-256",
+///     "kid": "op-key",
+///     "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+///     "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+/// }))
+/// .unwrap();
+/// key.use_ = Some("sig".to_string());
+/// let mut jwks = JwkSet::new();
+/// jwks.add_key(key);
+///
+/// let statement = SubordinateStatement::builder(
+///     EntityId::parse("https://ta.example.org").unwrap(),
+///     EntityId::parse("https://op.example.org").unwrap(),
+///     jwks,
+/// )
+/// .lifetime(Duration::days(1))
+/// .build()
+/// .unwrap();
+/// assert_eq!(statement.claims.exp - statement.claims.iat, 86_400);
+/// ```
+///
+/// Reference: OpenID Federation 1.0 - Sections 3.1.1 and 3.1.3
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-3.1.1>)
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct SubordinateStatementBuilder {
+    issuer: EntityId,
+    subject: EntityId,
+    jwks: JwkSet,
+    issued_at: Option<i64>,
+    expiry: Option<Expiry>,
+    metadata: Option<EntityMetadata>,
+    metadata_policy: Option<HashMap<String, HashMap<String, PolicyOperators>>>,
+    metadata_policy_crit: Option<Vec<String>>,
+    constraints: Option<Constraints>,
+    source_endpoint: Option<Url>,
+    crit: Option<Vec<String>>,
+    extension_claims: HashMap<String, serde_json::Value>,
+}
+
+impl SubordinateStatementBuilder {
+    /// `iat`, in seconds since the Unix epoch. Without it, `iat` is the time of
+    /// [`build`](Self::build).
+    pub fn issued_at(mut self, iat: i64) -> Self {
+        self.issued_at = Some(iat);
+        self
+    }
+
+    /// `exp`, in seconds since the Unix epoch. Replaces an earlier [`lifetime`](Self::lifetime).
+    pub fn expires_at(mut self, exp: i64) -> Self {
+        self.expiry = Some(Expiry::At(exp));
+        self
+    }
+
+    /// `exp` as `iat` plus `lifetime`. Replaces an earlier [`expires_at`](Self::expires_at).
+    pub fn lifetime(mut self, lifetime: Duration) -> Self {
+        self.expiry = Some(Expiry::After(lifetime));
+        self
+    }
+
+    /// Metadata the Superior overrides for the subject. It applies only to the Entity Types the
+    /// subject declares, and only to the subject (Section 3.1.3).
+    pub fn metadata(mut self, metadata: EntityMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// The metadata policy for the subject and every Entity below it, keyed by Entity Type
+    /// Identifier, then by metadata parameter (Section 6.1).
+    pub fn metadata_policy(mut self, metadata_policy: HashMap<String, HashMap<String, PolicyOperators>>) -> Self {
+        self.metadata_policy = Some(metadata_policy);
+        self
+    }
+
+    /// Policy operators other than the standard ones that every verifier must understand
+    /// (Section 3.1.3).
+    pub fn metadata_policy_crit(mut self, operators: Vec<String>) -> Self {
+        self.metadata_policy_crit = Some(operators);
+        self
+    }
+
+    /// Constraints on the Trust Chains through the subject (Section 6.2).
+    pub fn constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = Some(constraints);
+        self
+    }
+
+    /// The fetch endpoint the statement is issued from (Sections 3.1.3 and 8.1).
+    pub fn source_endpoint(mut self, source_endpoint: Url) -> Self {
+        self.source_endpoint = Some(source_endpoint);
+        self
+    }
+
+    /// An extension claim, one this specification does not define. Name it in
+    /// [`crit`](Self::crit) if verifiers must understand it.
+    pub fn extension_claim(mut self, name: impl Into<String>, value: serde_json::Value) -> Self {
+        self.extension_claims.insert(name.into(), value);
+        self
+    }
+
+    /// Extension claims that every verifier must understand and process (Section 13.4). Each one
+    /// is added with [`extension_claim`](Self::extension_claim).
+    pub fn crit(mut self, claims: Vec<String>) -> Self {
+        self.crit = Some(claims);
+        self
+    }
+
+    /// Builds the statement and checks it: [`SubordinateStatement::validate`] (among others,
+    /// `iss != sub` and an `exp` in the future), `exp` after `iat`, and the producer rules for
+    /// `crit`, `metadata_policy_crit` and `source_endpoint` (Sections 3.1.3 and 13.4).
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidSubordinateStatement`] when no expiry was set or a check fails.
+    pub fn build(self) -> FederationResult<SubordinateStatement> {
+        let iat = self.issued_at.unwrap_or_else(|| Utc::now().timestamp());
+        let exp = match self.expiry {
+            Some(Expiry::At(exp)) => exp,
+            Some(Expiry::After(lifetime)) => iat.saturating_add(lifetime.num_seconds()),
+            None => {
+                return Err(FederationError::InvalidSubordinateStatement(
+                    "a Subordinate Statement needs an expiry: set expires_at or lifetime".to_string(),
+                ))
+            }
+        };
+        if exp <= iat {
+            return Err(FederationError::InvalidSubordinateStatement(format!(
+                "exp ({exp}) must be after iat ({iat})"
+            )));
+        }
+
+        let mut statement = SubordinateStatement::new(self.issuer, self.subject, exp, iat, self.jwks);
+        statement.claims.additional = self.extension_claims;
+        statement.metadata = self.metadata;
+        statement.metadata_policy = self.metadata_policy;
+        statement.metadata_policy_crit = self.metadata_policy_crit;
+        statement.constraints = self.constraints;
+        statement.source_endpoint = self.source_endpoint.map(String::from);
+        statement.crit = self.crit;
+
+        statement.validate()?;
+        statement.validate_for_issuing()?;
+        Ok(statement)
+    }
+}
+
 /// Checks the `federation_entity` metadata of a statement this crate is about to sign with
 /// [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate): `https`
 /// federation endpoints without a fragment, and no `none` in
@@ -238,6 +533,12 @@ fn validate_federation_entity_for_signing(metadata: Option<&EntityMetadata>) -> 
     }
 }
 
+/// Checks `iss` and `sub` of a statement this crate is about to sign: each Entity Identifier uses
+/// `https`, has a host and has no fragment. The check runs when signing only; statements fetched
+/// from other entities are not held to it.
+///
+/// Reference: OpenID Federation 1.0 - Section 1.2 Terminology, Entity Identifier
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-1.2>)
 fn validate_entity_ids_for_signing(claims: &JwtClaims) -> FederationResult<()> {
     for (claim, entity_id) in [("iss", &claims.iss), ("sub", &claims.sub)] {
         validate_entity_id_for_signing(claim, entity_id)?;
@@ -542,6 +843,15 @@ impl EntityConfiguration {
     }
 
     /// Convert this entity configuration to an subordinate statement. All new fields in the subordinate statement will be set to None.
+    ///
+    /// The result is not a correct Subordinate Statement whichever configuration it is called on:
+    /// called on the subordinate's configuration, `iss`, `iat` and `exp` stay the subordinate's;
+    /// called on the Superior's, `jwks` are the Superior's keys. It also copies `metadata` and
+    /// `crit`, which are the subject's own values, not the Superior's overrides.
+    #[deprecated(
+        since = "0.4.0",
+        note = "issue Subordinate Statements with `SubordinateStatement::builder` from what the Superior registered"
+    )]
     pub fn to_subordinate_statement(&self, sub: EntityId) -> SubordinateStatement {
         SubordinateStatement {
             claims: {
