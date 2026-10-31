@@ -194,8 +194,10 @@ impl SubordinateStatement {
     /// `entity-statement+jwt` that names the key in `kid`.
     ///
     /// The statement is checked before the signer is called: [`SubordinateStatement::validate`],
-    /// `iss` and `sub` as `https` Entity Identifiers without a fragment, and [`JwkSet::validate`] on
-    /// `jwks`, so the subject's keys are published only as public keys
+    /// `iss` and `sub` as `https` Entity Identifiers without a fragment, the endpoints of any
+    /// `federation_entity` metadata with
+    /// [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate), and
+    /// [`JwkSet::validate`] on `jwks`, so the subject's keys are published only as public keys
     /// with unique `kid`s. Whether the signer's key is one the issuer publishes cannot be checked
     /// here; verifiers check it against the issuer's authenticated keys.
     ///
@@ -209,6 +211,7 @@ impl SubordinateStatement {
     pub async fn sign(&self, signer: &dyn Signer) -> FederationResult<String> {
         self.validate()?;
         validate_entity_ids_for_signing(&self.claims)?;
+        validate_federation_entity_for_signing(self.metadata.as_ref())?;
         self.jwks.validate()?;
         sign_federation_jwt(self, JwtArtifactType::EntityStatement, signer).await
     }
@@ -220,6 +223,21 @@ impl SubordinateStatement {
 ///
 /// Reference: OpenID Federation 1.0 - Section 1.2 Terminology, Entity Identifier
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-1.2>)
+/// Checks the `federation_entity` metadata of a statement this crate is about to sign with
+/// [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate): `https`
+/// federation endpoints without a fragment, and no `none` in
+/// `endpoint_auth_signing_alg_values_supported`. Like the Entity Identifier check, it runs when
+/// signing only.
+///
+/// Reference: OpenID Federation 1.0 - Section 5.1.1 Federation Entity
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1.1>)
+fn validate_federation_entity_for_signing(metadata: Option<&EntityMetadata>) -> FederationResult<()> {
+    match metadata.and_then(|metadata| metadata.federation_entity.as_ref()) {
+        Some(federation_entity) => federation_entity.validate(),
+        None => Ok(()),
+    }
+}
+
 fn validate_entity_ids_for_signing(claims: &JwtClaims) -> FederationResult<()> {
     for (claim, entity_id) in [("iss", &claims.iss), ("sub", &claims.sub)] {
         validate_entity_id_for_signing(claim, entity_id)?;
@@ -378,7 +396,9 @@ impl EntityConfiguration {
     ///
     /// Before the signer is called, the configuration must pass [`EntityConfiguration::validate`]
     /// and [`JwkSet::validate`], its Entity Identifier and every Entity Identifier in
-    /// `authority_hints` and `trust_anchor_hints` must use `https` and have no fragment, and the
+    /// `authority_hints` and `trust_anchor_hints` must use `https` and have no fragment, its
+    /// `federation_entity` metadata must pass
+    /// [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate), and the
     /// signer's `kid` must name a key in the configuration's own `jwks`, since verifiers check
     /// the self-signature against them. After signing, the result is
     /// verified the way a verifier does it, with [`EntityConfiguration::from_verified_jwt`], so a
@@ -404,6 +424,7 @@ impl EntityConfiguration {
                 validate_entity_id_for_signing(claim, entity_id)?;
             }
         }
+        validate_federation_entity_for_signing(self.metadata.as_ref())?;
         self.jwks.validate()?;
         if !self
             .jwks

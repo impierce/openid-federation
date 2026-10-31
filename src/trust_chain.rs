@@ -309,6 +309,7 @@ mod tests {
             federation_resolve_endpoint: None,
             federation_trust_mark_status_endpoint: None,
             federation_historical_keys_endpoint: None,
+            ..Default::default()
         });
         metadata
     }

@@ -500,3 +500,76 @@ async fn entity_identifiers_without_https_or_with_fragment_are_refused_when_sign
 
     assert_eq!(signer.calls(), 0, "the signer must not be called");
 }
+
+fn federation_entity(fetch_endpoint: &str) -> openid_federation::EntityMetadata {
+    let mut metadata = openid_federation::EntityMetadata::new();
+    metadata.federation_entity = Some(openid_federation::FederationEntityMetadata {
+        federation_fetch_endpoint: Some(url::Url::parse(fetch_endpoint).unwrap()),
+        ..Default::default()
+    });
+    metadata
+}
+
+#[tokio::test]
+async fn federation_entity_endpoints_are_checked_when_signing() {
+    let anchor_id = EntityId::parse("https://ta.example.org").unwrap();
+    let leaf_id = EntityId::parse("https://op.example.org").unwrap();
+    let signer = Counting::new(InMemorySigner::from_der(Algorithm::ES256, "ta-key", EC_P256_DER).unwrap());
+
+    for bad in ["https://ta.example.org/fetch#frag", "http://ta.example.org/fetch"] {
+        let mut configuration = EntityConfiguration::new(
+            anchor_id.clone(),
+            public_jwks(EC_P256_JWK, "ta-key"),
+            now() + 3600,
+            now(),
+        );
+        configuration.metadata = Some(federation_entity(bad));
+        let error = configuration.sign(&signer).await.unwrap_err();
+        assert!(
+            error.to_string().contains("federation_fetch_endpoint"),
+            "{bad}: {error}"
+        );
+
+        let mut statement = SubordinateStatement::new(
+            anchor_id.clone(),
+            leaf_id.clone(),
+            now() + 3600,
+            now(),
+            public_jwks(EC_P256_JWK, "op-key"),
+        );
+        statement.metadata = Some(federation_entity(bad));
+        let error = statement.sign(&signer).await.unwrap_err();
+        assert!(
+            error.to_string().contains("federation_fetch_endpoint"),
+            "{bad}: {error}"
+        );
+    }
+    assert_eq!(signer.calls(), 0, "the signer must not be called");
+
+    let mut configuration = EntityConfiguration::new(
+        anchor_id.clone(),
+        public_jwks(EC_P256_JWK, "ta-key"),
+        now() + 3600,
+        now(),
+    );
+    configuration.metadata = Some(federation_entity("https://ta.example.org:8443/fetch?tenant=1"));
+    let jwt = configuration.sign(&signer).await.unwrap();
+    assert_eq!(
+        EntityConfiguration::from_verified_jwt(&jwt, &anchor_id).unwrap(),
+        configuration
+    );
+
+    let mut statement = SubordinateStatement::new(
+        anchor_id.clone(),
+        leaf_id.clone(),
+        now() + 3600,
+        now(),
+        public_jwks(EC_P256_JWK, "op-key"),
+    );
+    statement.metadata = Some(federation_entity("https://op.example.org/fetch"));
+    let jwt = statement.sign(&signer).await.unwrap();
+    let verified =
+        SubordinateStatement::from_verified_jwt(&jwt, &anchor_id, &leaf_id, &public_jwks(EC_P256_JWK, "ta-key"))
+            .unwrap();
+    assert_eq!(verified, statement);
+}
