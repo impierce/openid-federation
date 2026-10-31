@@ -351,7 +351,8 @@ impl EntityConfiguration {
     ///
     /// Each `trust_marks` entry is checked with [`TrustMarkEntry::validate`]: its type must equal
     /// the `trust_mark_type` claim of its Trust Mark JWT. Whether the Trust Marks themselves are
-    /// valid and trusted is a separate step.
+    /// valid and trusted is a separate step. `authority_hints` and `trust_anchor_hints`, when
+    /// present, must not be empty (Section 3.1.2).
     ///
     /// Reference: OpenID Federation 1.0 - Section 3.2.1 Entity Configuration Validation
     /// <https://openid.net/specs/openid-federation-1_0.html#name-entity-configuration-valida>
@@ -382,12 +383,105 @@ impl EntityConfiguration {
             }
         }
 
+        for (claim, hints) in [
+            ("authority_hints", &self.authority_hints),
+            ("trust_anchor_hints", &self.trust_anchor_hints),
+        ] {
+            if hints.as_ref().is_some_and(Vec::is_empty) {
+                return Err(FederationError::InvalidSubordinateStatement(format!(
+                    "Entity configuration {claim} must not be the empty array"
+                )));
+            }
+        }
+
         for entry in self.trust_marks.iter().flatten() {
             entry.validate()?;
         }
 
         // TODO: Validate `crit` if present according to the specification.
 
+        Ok(())
+    }
+
+    /// Checks the rules for the Entity Configuration of a Trust Anchor, on top of
+    /// [`EntityConfiguration::validate`].
+    ///
+    /// - A Trust Anchor with no Superiors (`has_superiors == false`) publishes neither
+    ///   `authority_hints` nor `trust_anchor_hints`. One that also acts as an Intermediate Entity
+    ///   in another federation (Section 4.1) publishes `authority_hints` naming its Immediate
+    ///   Superiors.
+    /// - Its `federation_entity` metadata publishes `federation_fetch_endpoint` and
+    ///   `federation_list_endpoint` (Sections 5.1.1, 8.1, 8.2).
+    ///
+    /// `trust_mark_issuers` and `trust_mark_owners` take effect only in a Trust Anchor's
+    /// configuration (Section 3.1.2).
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 3.1.2
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-3.1.2>) and Section 5.1.1
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1.1>)
+    pub fn validate_as_trust_anchor(&self, has_superiors: bool) -> FederationResult<()> {
+        self.validate()?;
+        if has_superiors {
+            self.require_authority_hints("a Trust Anchor with Superiors")?;
+        } else {
+            for (claim, hints) in [
+                ("authority_hints", &self.authority_hints),
+                ("trust_anchor_hints", &self.trust_anchor_hints),
+            ] {
+                if hints.is_some() {
+                    return Err(FederationError::InvalidSubordinateStatement(format!(
+                        "the Entity Configuration of a Trust Anchor with no Superiors must not contain {claim}"
+                    )));
+                }
+            }
+        }
+        self.require_superior_endpoints("a Trust Anchor")
+    }
+
+    /// Checks the rules for the Entity Configuration of an Intermediate Entity, on top of
+    /// [`EntityConfiguration::validate`]: it names its Immediate Superiors in `authority_hints`,
+    /// and its `federation_entity` metadata publishes `federation_fetch_endpoint` and
+    /// `federation_list_endpoint` (Sections 5.1.1, 8.1, 8.2).
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 3.1.2
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-3.1.2>) and Section 5.1.1
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1.1>)
+    pub fn validate_as_intermediate(&self) -> FederationResult<()> {
+        self.validate()?;
+        self.require_authority_hints("an Intermediate Entity")?;
+        self.require_superior_endpoints("an Intermediate Entity")
+    }
+
+    fn require_authority_hints(&self, role: &str) -> FederationResult<()> {
+        if self.authority_hints.is_none() {
+            return Err(FederationError::InvalidSubordinateStatement(format!(
+                "the Entity Configuration of {role} must name its Immediate Superiors in authority_hints"
+            )));
+        }
+        Ok(())
+    }
+
+    fn require_superior_endpoints(&self, role: &str) -> FederationResult<()> {
+        let federation_entity = self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.federation_entity.as_ref());
+        for (name, endpoint) in [
+            (
+                "federation_fetch_endpoint",
+                federation_entity.and_then(|metadata| metadata.federation_fetch_endpoint.as_ref()),
+            ),
+            (
+                "federation_list_endpoint",
+                federation_entity.and_then(|metadata| metadata.federation_list_endpoint.as_ref()),
+            ),
+        ] {
+            if endpoint.is_none() {
+                return Err(FederationError::InvalidMetadata(format!(
+                    "the federation_entity metadata of {role} must publish {name}"
+                )));
+            }
+        }
         Ok(())
     }
 
