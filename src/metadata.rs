@@ -6,6 +6,34 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
 
+/// The parameters `FederationEntityMetadata` has a field for. `additional` must not repeat them.
+const FEDERATION_ENTITY_PARAMETERS: [&str; 24] = [
+    "organization_name",
+    "display_name",
+    "description",
+    "keywords",
+    "contacts",
+    "logo_uri",
+    "policy_uri",
+    "information_uri",
+    "organization_uri",
+    "federation_fetch_endpoint",
+    "federation_list_endpoint",
+    "federation_resolve_endpoint",
+    "federation_trust_mark_status_endpoint",
+    "federation_historical_keys_endpoint",
+    "federation_trust_mark_list_endpoint",
+    "federation_trust_mark_endpoint",
+    "endpoint_auth_signing_alg_values_supported",
+    "federation_fetch_endpoint_auth_methods",
+    "federation_list_endpoint_auth_methods",
+    "federation_resolve_endpoint_auth_methods",
+    "federation_trust_mark_status_endpoint_auth_methods",
+    "federation_trust_mark_list_endpoint_auth_methods",
+    "federation_trust_mark_endpoint_auth_methods",
+    "federation_historical_keys_endpoint_auth_methods",
+];
+
 /// Federation entity metadata as defined in the OpenID Federation specification.
 ///
 /// Reference: OpenID Federation 1.0 - Section 5.1.1 Federation Entity
@@ -121,11 +149,21 @@ impl FederationEntityMetadata {
 
     /// Checks the rules Section 5.1.1 sets for these parameters: every federation endpoint uses
     /// `https` and has no fragment, and `endpoint_auth_signing_alg_values_supported` does not
-    /// list `none`.
+    /// list `none`. `additional` must not repeat a parameter the struct has a field for, so a
+    /// value placed there in code cannot bypass these checks or serialize as a duplicate member.
     ///
     /// Reference: OpenID Federation 1.0 - Section 5.1.1 Federation Entity
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1.1>)
     pub fn validate(&self) -> FederationResult<()> {
+        if let Some(name) = self
+            .additional
+            .keys()
+            .find(|name| FEDERATION_ENTITY_PARAMETERS.contains(&name.as_str()))
+        {
+            return Err(FederationError::InvalidMetadata(format!(
+                "{name} is a typed federation_entity parameter and must not appear in additional"
+            )));
+        }
         for (name, url) in self.endpoints() {
             UrlValidator::validate_endpoint_url(url)
                 .map_err(|err| FederationError::InvalidMetadata(format!("{name} {url}: {err}")))?;
@@ -645,6 +683,62 @@ mod federation_entity_tests {
     #[test]
     fn endpoint_without_https_fails() {
         assert!(with_fetch_endpoint("http://ta.example.org/fetch").validate().is_err());
+    }
+
+    #[test]
+    fn every_endpoint_rejects_fragment_and_http() {
+        for endpoint in [
+            "federation_fetch_endpoint",
+            "federation_list_endpoint",
+            "federation_resolve_endpoint",
+            "federation_trust_mark_status_endpoint",
+            "federation_trust_mark_list_endpoint",
+            "federation_trust_mark_endpoint",
+            "federation_historical_keys_endpoint",
+        ] {
+            for bad in ["https://ta.example.org/x#frag", "http://ta.example.org/x"] {
+                let mut value = json!({});
+                value[endpoint] = json!(bad);
+                let metadata: FederationEntityMetadata = serde_json::from_value(value).unwrap();
+                let error = metadata.validate().unwrap_err();
+                assert!(error.to_string().contains(endpoint), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn typed_parameter_in_additional_fails() {
+        // Deserialization never puts a typed parameter into `additional`; code can.
+        for name in FEDERATION_ENTITY_PARAMETERS {
+            let mut metadata = FederationEntityMetadata::default();
+            metadata
+                .additional
+                .insert(name.to_string(), json!("http://ta.example.org/x"));
+            let error = metadata.validate().unwrap_err();
+            assert!(error.to_string().contains(name), "{error}");
+        }
+    }
+
+    #[test]
+    fn every_field_is_a_listed_parameter() {
+        // Keeps `FEDERATION_ENTITY_PARAMETERS` in step with the struct: a fully populated value
+        // serializes to exactly the listed names.
+        let mut value = json!({});
+        for name in FEDERATION_ENTITY_PARAMETERS {
+            value[name] = match name {
+                "keywords" | "contacts" | "endpoint_auth_signing_alg_values_supported" => json!(["x"]),
+                name if name.ends_with("_auth_methods") => json!(["none"]),
+                name if name.ends_with("_uri") || name.ends_with("_endpoint") => json!("https://ta.example.org/x"),
+                _ => json!("x"),
+            };
+        }
+        let metadata: FederationEntityMetadata = serde_json::from_value(value).unwrap();
+        assert!(metadata.additional.is_empty(), "{:?}", metadata.additional);
+        let serialized = serde_json::to_value(&metadata).unwrap();
+        assert_eq!(
+            serialized.as_object().unwrap().len(),
+            FEDERATION_ENTITY_PARAMETERS.len()
+        );
     }
 
     #[test]

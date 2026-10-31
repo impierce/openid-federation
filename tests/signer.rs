@@ -554,4 +554,18 @@ async fn federation_entity_endpoints_are_checked_when_signing() {
         EntityConfiguration::from_verified_jwt(&jwt, &anchor_id).unwrap(),
         configuration
     );
+
+    let mut statement = SubordinateStatement::new(
+        anchor_id.clone(),
+        leaf_id.clone(),
+        now() + 3600,
+        now(),
+        public_jwks(EC_P256_JWK, "op-key"),
+    );
+    statement.metadata = Some(federation_entity("https://op.example.org/fetch"));
+    let jwt = statement.sign(&signer).await.unwrap();
+    let verified =
+        SubordinateStatement::from_verified_jwt(&jwt, &anchor_id, &leaf_id, &public_jwks(EC_P256_JWK, "ta-key"))
+            .unwrap();
+    assert_eq!(verified, statement);
 }
