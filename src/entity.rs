@@ -240,10 +240,14 @@ fn validate_federation_entity_for_signing(metadata: Option<&EntityMetadata>) -> 
 
 fn validate_entity_ids_for_signing(claims: &JwtClaims) -> FederationResult<()> {
     for (claim, entity_id) in [("iss", &claims.iss), ("sub", &claims.sub)] {
-        UrlValidator::validate_entity_id(entity_id.as_url())
-            .map_err(|err| FederationError::Configuration(format!("{claim} {entity_id}: {err}")))?;
+        validate_entity_id_for_signing(claim, entity_id)?;
     }
     Ok(())
+}
+
+fn validate_entity_id_for_signing(claim: &str, entity_id: &EntityId) -> FederationResult<()> {
+    UrlValidator::validate_entity_id(entity_id.as_url())
+        .map_err(|err| FederationError::Configuration(format!("{claim} {entity_id}: {err}")))
 }
 
 impl EntityConfiguration {
@@ -391,7 +395,8 @@ impl EntityConfiguration {
     /// `entity-statement+jwt` that names the key in `kid`.
     ///
     /// Before the signer is called, the configuration must pass [`EntityConfiguration::validate`]
-    /// and [`JwkSet::validate`], its Entity Identifier must use `https` and have no fragment, its
+    /// and [`JwkSet::validate`], its Entity Identifier and every Entity Identifier in
+    /// `authority_hints` and `trust_anchor_hints` must use `https` and have no fragment, its
     /// `federation_entity` metadata must pass
     /// [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate), and the
     /// signer's `kid` must name a key in the configuration's own `jwks`, since verifiers check
@@ -411,6 +416,14 @@ impl EntityConfiguration {
     pub async fn sign(&self, signer: &dyn Signer) -> FederationResult<String> {
         self.validate()?;
         validate_entity_ids_for_signing(&self.claims)?;
+        for (claim, hints) in [
+            ("authority_hints", &self.authority_hints),
+            ("trust_anchor_hints", &self.trust_anchor_hints),
+        ] {
+            for entity_id in hints.iter().flatten() {
+                validate_entity_id_for_signing(claim, entity_id)?;
+            }
+        }
         validate_federation_entity_for_signing(self.metadata.as_ref())?;
         self.jwks.validate()?;
         if !self
