@@ -363,3 +363,60 @@ async fn signer_without_kid_is_refused() {
         .unwrap_err();
     assert!(matches!(error, FederationError::Configuration(_)), "{error:?}");
 }
+
+/// A signer that claims an HMAC algorithm.
+struct Symmetric;
+
+#[async_trait]
+impl Signer for Symmetric {
+    fn alg(&self) -> Algorithm {
+        Algorithm::HS256
+    }
+
+    fn kid(&self) -> &str {
+        "hmac-key"
+    }
+
+    async fn sign(&self, _: &[u8]) -> Result<Vec<u8>, SignError> {
+        unreachable!("a symmetric signer must not be called")
+    }
+}
+
+#[tokio::test]
+async fn symmetric_signer_is_refused() {
+    let error = sign_federation_jwt(&serde_json::json!({}), JwtArtifactType::EntityStatement, &Symmetric)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, FederationError::Configuration(_)), "{error:?}");
+}
+
+#[tokio::test]
+async fn additional_claim_repeating_a_typed_claim_is_refused() {
+    let anchor_id = EntityId::parse("https://ta.example.org").unwrap();
+    let leaf_id = EntityId::parse("https://op.example.org").unwrap();
+    let signer = Counting::new(InMemorySigner::from_der(Algorithm::ES256, "ta-key", EC_P256_DER).unwrap());
+
+    let mut statement = SubordinateStatement::new(
+        anchor_id.clone(),
+        leaf_id,
+        now() + 3600,
+        now(),
+        public_jwks(EC_P256_JWK, "op-key"),
+    );
+    statement
+        .claims
+        .additional
+        .insert("iss".to_string(), serde_json::json!("https://attacker.example"));
+    let error = statement.sign(&signer).await.unwrap_err();
+    assert!(error.to_string().contains("\"iss\" appears more than once"), "{error}");
+
+    let mut configuration =
+        EntityConfiguration::new(anchor_id, public_jwks(EC_P256_JWK, "ta-key"), now() + 3600, now());
+    configuration
+        .claims
+        .additional
+        .insert("jwks".to_string(), serde_json::json!({ "keys": [] }));
+    assert!(configuration.sign(&signer).await.is_err());
+
+    assert_eq!(signer.calls(), 0, "the signer must not be called");
+}
