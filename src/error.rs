@@ -48,6 +48,10 @@ pub enum FederationError {
     #[error("Invalid metadata: {0}")]
     InvalidMetadata(String),
 
+    /// A Trust Mark or Trust Mark delegation that is not well formed
+    #[error("Invalid Trust Mark: {0}")]
+    InvalidTrustMark(String),
+
     /// Federation configuration error
     #[error("Federation configuration error: {0}")]
     Configuration(String),

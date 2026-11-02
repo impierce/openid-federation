@@ -138,7 +138,7 @@ pub struct JwtClaims {
 /// `#[serde(flatten)]` when `serde_json`'s `arbitrary_precision` feature is enabled.
 ///
 /// Reference: <https://www.rfc-editor.org/rfc/rfc7519#section-2>
-mod numeric_date {
+pub(crate) mod numeric_date {
     use serde::{de, Deserialize, Deserializer};
 
     /// A NumericDate wrapper, so an optional claim can reuse the conversion.
@@ -161,12 +161,12 @@ mod numeric_date {
     }
 
     /// Deserialize a required NumericDate claim, for `#[serde(deserialize_with)]`.
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
         NumericDate::deserialize(deserializer).map(|date| date.0)
     }
 
     /// Deserialize an optional NumericDate claim, for `#[serde(deserialize_with)]`.
-    pub(super) fn deserialize_option<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
+    pub(crate) fn deserialize_option<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
         Ok(Option::<NumericDate>::deserialize(deserializer)?.map(|date| date.0))
     }
 }
