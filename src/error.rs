@@ -1,11 +1,16 @@
 //! Error types for OpenID Federation operations.
 
+use crate::ErrorResponse;
 use std::error::Error as StdError;
 use std::fmt;
 use thiserror::Error;
+use url::Url;
 
 /// The main error type for OpenID Federation operations.
+///
+/// New variants are not breaking changes, so a `match` on it needs a wildcard arm.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum FederationError {
     /// JWT-related errors
     #[error("JWT error: {0}")]
@@ -53,7 +58,48 @@ pub enum FederationError {
     /// A [`Signer`](crate::Signer) failed to sign
     #[error("Signing error: {0}")]
     Signing(#[from] SignError),
+
+    /// A federation endpoint, or a configuration endpoint, answered with an HTTP status other than
+    /// 2xx
+    #[error("{0}")]
+    Endpoint(Box<EndpointError>),
 }
+
+impl From<EndpointError> for FederationError {
+    fn from(error: EndpointError) -> Self {
+        Self::Endpoint(Box::new(error))
+    }
+}
+
+/// An HTTP response with a status other than 2xx from a federation endpoint or a configuration
+/// endpoint, see [`FederationError::Endpoint`].
+///
+/// Federation endpoints answer errors with the error response of OpenID Federation 1.0,
+/// [Section 8.9](https://openid.net/specs/openid-federation-1_0.html#section-8.9).
+///
+/// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointError {
+    /// The URL that was requested.
+    pub url: Url,
+    /// The HTTP status code of the response.
+    pub status: u16,
+    /// The error response the body carried, or `None` when the body was not one.
+    pub response: Option<ErrorResponse>,
+}
+
+impl fmt::Display for EndpointError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} answered HTTP {}", self.url, self.status)?;
+        match &self.response {
+            Some(response) => write!(f, ": {response}"),
+            None => Ok(()),
+        }
+    }
+}
+
+impl StdError for EndpointError {}
 
 /// An error from a [`Signer`](crate::Signer).
 ///
