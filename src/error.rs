@@ -148,21 +148,37 @@ pub type FederationResult<T> = Result<T, FederationError>;
 ///
 /// Stores live in memory and in the application's own database, each with its own error type;
 /// this wraps any of them.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>) and Section 8.2
+/// Subordinate Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
 #[derive(Debug)]
 pub struct StoreError(Box<dyn StdError + Send + Sync + 'static>);
 
 impl StoreError {
     /// Wraps `error`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>) and Section 8.2
+    /// Subordinate Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
     pub fn new<E: StdError + Send + Sync + 'static>(error: E) -> Self {
         Self(Box::new(error))
     }
 
     /// Wraps a message.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>) and Section 8.2
+    /// Subordinate Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
     pub fn msg<M: fmt::Display>(message: M) -> Self {
         Self(message.to_string().into())
     }
 
     /// The wrapped error.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>) and Section 8.2
+    /// Subordinate Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
     pub fn inner(&self) -> &(dyn StdError + Send + Sync + 'static) {
         self.0.as_ref()
     }

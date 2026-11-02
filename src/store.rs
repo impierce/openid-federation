@@ -147,9 +147,15 @@ impl Subordinate {
 #[async_trait]
 pub trait SubordinateStore: Send + Sync {
     /// The registered subordinate whose Entity Identifier is `entity_id`, or `None`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>)
     async fn subordinate(&self, entity_id: &EntityId) -> Result<Option<Subordinate>, StoreError>;
 
     /// Every registered subordinate, in no particular order.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.2 Subordinate Listing
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
     async fn subordinates(&self) -> Result<Vec<Subordinate>, StoreError>;
 }
 
@@ -164,12 +170,20 @@ pub struct InMemorySubordinateStore {
 
 impl InMemorySubordinateStore {
     /// An empty store.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>) and Section 8.2
+    /// Subordinate Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Registers `subordinate`, replacing and returning a subordinate with the same Entity
     /// Identifier, compared as a URL.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>) and Section 8.2
+    /// Subordinate Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
     pub fn insert(&self, subordinate: Subordinate) -> Option<Subordinate> {
         let mut subordinates = self.subordinates.write().unwrap_or_else(PoisonError::into_inner);
         // `HashMap::insert` keeps the old key, so remove first: the new spelling is the one served.
@@ -179,6 +193,10 @@ impl InMemorySubordinateStore {
     }
 
     /// Removes and returns the subordinate with `entity_id`, compared as a URL.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>) and Section 8.2
+    /// Subordinate Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
     pub fn remove(&self, entity_id: &EntityId) -> Option<Subordinate> {
         self.subordinates
             .write()

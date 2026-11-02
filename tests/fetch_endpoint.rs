@@ -250,6 +250,8 @@ async fn missing_repeated_or_malformed_sub_is_an_invalid_request() {
         "iss=https%3A%2F%2Fta.example.org",
         "sub=https%3A%2F%2Fop.example.org&sub=https%3A%2F%2Fop.example.org",
         "sub=not+a+url",
+        "sub=https%3A%2F%2Fop.example.org%23fragment",
+        "sub=http%3A%2F%2Fop.example.org",
     ] {
         let response = endpoint(store()).handle(&EndpointRequest::get(query)).await;
         assert_eq!(response.status, 400, "{query:?}");

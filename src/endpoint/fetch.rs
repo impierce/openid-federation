@@ -2,7 +2,7 @@
 //! Immediate Subordinates there (OpenID Federation 1.0, Section 8.1).
 
 use super::{EndpointRequest, EndpointResponse, ErrorCode, ErrorResponse, ENTITY_STATEMENT_CONTENT_TYPE};
-use crate::{EntityId, FederationError, FederationResult, Signer, SubordinateStore};
+use crate::{EntityId, FederationError, FederationResult, Signer, SubordinateStore, UrlValidator};
 use chrono::Duration;
 use std::fmt;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use url::Url;
 /// | Request                                     | Response                                                    |
 /// | ------------------------------------------- | ----------------------------------------------------------- |
 /// | `sub` names a registered subordinate        | `200`, [`ENTITY_STATEMENT_CONTENT_TYPE`], the statement     |
-/// | `sub` is missing, repeated or not a URL     | `400 invalid_request`                                       |
+/// | `sub` is missing, repeated or not an `https` URL without a fragment | `400 invalid_request`                                       |
 /// | `sub` is the issuer's own Entity Identifier | `400 invalid_request`                                       |
 /// | `sub` names no registered subordinate       | `404 not_found`                                             |
 /// | the store or the signer fails               | `500 server_error`                                          |
@@ -141,7 +141,12 @@ impl FetchEndpoint {
             Ok(None) => return Ok(invalid_request("the sub parameter is required")),
             Err(error) => return Ok(error.to_endpoint_response()),
         };
-        let Ok(sub) = EntityId::parse(sub) else {
+        // An Entity Identifier is an `https` URL with a host and no fragment (Section 1.2), so
+        // anything else cannot name a subordinate and is a malformed request, not an unknown one.
+        let Some(sub) = EntityId::parse(sub)
+            .ok()
+            .filter(|sub| UrlValidator::validate_entity_id(sub.as_url()).is_ok())
+        else {
             return Ok(invalid_request("the sub parameter is not an Entity Identifier"));
         };
         if sub == self.issuer {

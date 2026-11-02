@@ -132,11 +132,17 @@ impl EndpointRequest {
     }
 
     /// The HTTP method.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
     pub fn method(&self) -> HttpMethod {
         self.method
     }
 
     /// Every parameter, in order, repeated parameters kept.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
     pub fn parameters(&self) -> &[(String, String)] {
         &self.parameters
     }
