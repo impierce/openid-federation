@@ -136,8 +136,9 @@ impl FederationKeys {
     ///
     /// # Errors
     ///
-    /// [`FederationError::Configuration`] when the records do not have exactly one active key or
-    /// repeat a `kid`, when two signers share a `kid`, or when the active key or a next key has no
+    /// [`FederationError::Configuration`] when the records do not have exactly one active key,
+    /// repeat a `kid` or carry a revocation for a key that is not retired, when two signers share
+    /// a `kid`, or when the active key or a next key has no
     /// signer in `signers`; the errors of [`JwkSet::validate`] for a published key that cannot be
     /// published, and of [`Jwk::to_decoding_key`] for one that has no usable key material.
     ///
@@ -168,6 +169,16 @@ impl FederationKeys {
         {
             return Err(key_error(format!(
                 "the retired key {:?} has no retired_at",
+                record.kid()
+            )));
+        }
+        if let Some(record) = records
+            .iter()
+            .find(|record| record.state != KeyState::Retired && record.revoked.is_some())
+        {
+            // `jwks` would publish a revoked key.
+            return Err(key_error(format!(
+                "the key {:?} is revoked but not retired",
                 record.kid()
             )));
         }

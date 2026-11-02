@@ -547,15 +547,40 @@ impl HistoricalKeys {
 
     /// Checks that the keys can be published: as for [`JwkSet::validate`], every key has a
     /// non-empty `kid`, no two keys share one, and no key carries private or symmetric key
-    /// material.
+    /// material. Neither does an `additional` map of a key or of its revocation repeat a member
+    /// the key or revocation serializes, which would publish that member twice (RFC 7517
+    /// Section 4).
     ///
     /// # Errors
     ///
-    /// The errors of [`JwkSet::validate`].
+    /// [`FederationError::InvalidMetadata`] when an `additional` map repeats a member, and the
+    /// errors of [`JwkSet::validate`].
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
     /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
     pub fn validate(&self) -> FederationResult<()> {
+        for historical in &self.keys {
+            let kid = &historical.key.kid;
+            let set = [
+                ("exp", true),
+                ("iat", historical.iat.is_some()),
+                ("nbf", historical.nbf.is_some()),
+                ("revoked", historical.revoked.is_some()),
+            ];
+            if let Some(name) = repeated_member(&historical.key.additional, &set) {
+                return Err(FederationError::InvalidMetadata(format!(
+                    "historical key {kid:?} repeats the {name} member in its additional members"
+                )));
+            }
+            if let Some(revocation) = &historical.revoked {
+                let set = [("revoked_at", true), ("reason", revocation.reason.is_some())];
+                if let Some(name) = repeated_member(&revocation.additional, &set) {
+                    return Err(FederationError::InvalidMetadata(format!(
+                        "the revocation of historical key {kid:?} repeats the {name} member in its additional members"
+                    )));
+                }
+            }
+        }
         JwkSet {
             keys: self.keys.iter().map(|historical| historical.key.clone()).collect(),
         }
@@ -583,8 +608,8 @@ impl HistoricalKeys {
     ///
     /// # Errors
     ///
-    /// [`FederationError::InvalidSubordinateStatement`] when `iss` is another entity, and the
-    /// errors of verifying the JWT.
+    /// [`FederationError::InvalidSubordinateStatement`] when `iss` is another entity, the errors
+    /// of verifying the JWT, and those of [`validate`](Self::validate).
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
     /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
@@ -598,6 +623,7 @@ impl HistoricalKeys {
             issuer_jwks,
             crate::JwtArtifactType::SignedJwkSet,
         )?;
+        keys.validate()?;
         if keys.iss != *issuer {
             return Err(FederationError::InvalidSubordinateStatement(format!(
                 "historical keys of {} were issued by {}",
@@ -606,6 +632,17 @@ impl HistoricalKeys {
         }
         Ok(keys)
     }
+}
+
+/// The first member in `members` that is serialized, as its flag says, and also in `additional`.
+fn repeated_member<'a>(
+    additional: &HashMap<String, serde_json::Value>,
+    members: &[(&'a str, bool)],
+) -> Option<&'a str> {
+    members
+        .iter()
+        .find(|(name, serialized)| *serialized && additional.contains_key(*name))
+        .map(|(name, _)| *name)
 }
 
 #[cfg(test)]

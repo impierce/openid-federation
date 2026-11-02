@@ -5,9 +5,9 @@
 use async_trait::async_trait;
 use jsonwebtoken::Algorithm;
 use openid_federation::{
-    EntityId, ErrorCode, ErrorResponse, FederationError, FederationKeys, HistoricalKey, HistoricalKeys,
-    HistoricalKeysEndpoint, InMemoryKeyStore, InMemorySigner, Jwk, KeyRecord, KeyStore, RevocationReason, Signer,
-    StoreError,
+    sign_federation_jwt, EntityId, ErrorCode, ErrorResponse, FederationError, FederationKeys, HistoricalKey,
+    HistoricalKeys, HistoricalKeysEndpoint, InMemoryKeyStore, InMemorySigner, Jwk, JwtArtifactType, KeyRecord,
+    KeyRevocation, KeyStore, RevocationReason, Signer, StoreError,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -219,6 +219,74 @@ fn active_key_cannot_be_revoked_and_a_key_is_revoked_once() {
     keys.revoke("ta-2024", now(), None).unwrap();
     let error = keys.revoke("ta-2024", now(), None).unwrap_err();
     assert!(error.to_string().contains("already revoked"), "{error}");
+}
+
+#[tokio::test]
+async fn additional_member_repeating_a_published_one_is_refused() {
+    let keys = rolled_over_keys();
+    let signer = keys.active_signer();
+    let sign = |historical: HistoricalKey| {
+        let signer = signer.clone();
+        async move {
+            HistoricalKeys::new(anchor_id(), now(), vec![historical])
+                .sign(signer.as_ref())
+                .await
+        }
+    };
+    let retired = || keys.historical_keys().remove(0);
+
+    let mut historical = retired();
+    historical.key.additional.insert("exp".to_string(), json!(1));
+    let error = sign(historical).await.unwrap_err();
+    assert!(error.to_string().contains("repeats the exp member"), "{error}");
+
+    // `iat` is published once when the historical key has none of its own.
+    let mut historical = retired();
+    historical.key.additional.insert("iat".to_string(), json!(1));
+    sign(historical.clone()).await.unwrap();
+    historical.iat = Some(2);
+    let error = sign(historical).await.unwrap_err();
+    assert!(error.to_string().contains("repeats the iat member"), "{error}");
+
+    let mut historical = retired();
+    let mut revocation = KeyRevocation::new(1_750_000_000, None);
+    revocation.additional.insert("reason".to_string(), json!("lost"));
+    historical.revoked = Some(revocation.clone());
+    sign(historical.clone()).await.unwrap();
+    revocation.additional.insert("revoked_at".to_string(), json!(1));
+    historical.revoked = Some(revocation);
+    let error = sign(historical).await.unwrap_err();
+    assert!(error.to_string().contains("revocation of historical key"), "{error}");
+}
+
+#[tokio::test]
+async fn verified_set_that_cannot_be_published_is_refused() {
+    let keys = rolled_over_keys();
+    let mut historical = keys.historical_keys();
+    // A second key under the same `kid`, signed without `HistoricalKeys::sign`'s check.
+    historical.push(historical[0].clone());
+    let jwt = sign_federation_jwt(
+        &HistoricalKeys::new(anchor_id(), now(), historical),
+        JwtArtifactType::SignedJwkSet,
+        keys.active_signer().as_ref(),
+    )
+    .await
+    .unwrap();
+
+    assert!(HistoricalKeys::from_verified_jwt(&jwt, &anchor_id(), &keys.jwks()).is_err());
+}
+
+#[test]
+fn record_revoked_but_not_retired_is_refused() {
+    let keys = rolled_over_keys();
+    let mut records = keys.records().to_vec();
+    let previous = records.iter_mut().find(|record| record.kid() == "ta-2025").unwrap();
+    previous.revoked = Some(KeyRevocation::new(now(), Some(RevocationReason::Compromised)));
+
+    let error = FederationKeys::from_records(records, [keys.active_signer()])
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("revoked but not retired"), "{error}");
 }
 
 /// A key store whose database is down.
