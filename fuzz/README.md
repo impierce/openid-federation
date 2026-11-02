@@ -13,7 +13,7 @@ One file per target in [`fuzz_targets/`](fuzz_targets/); the doc comment at the 
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
 | `entity_statement` | `EntityConfiguration`, `SubordinateStatement`, `EntityMetadata` as JSON: parse, `validate`, `SubordinateStatement::builder`, round trip | a JSON document                                    |
 | `jwt`              | `decode_header` and `typ` validation, `extract_claims_unverified`, `from_verified_jwt`, `TrustChain::try_new` over the input's lines | a compact JWT, or one JWT per line                 |
-| `trust_mark`       | `TrustMarkEntry::validate`; `TrustMark` and `TrustMarkDelegation` validate; `TrustMark`, `TrustMarkDelegation`, `TrustMarkIssuers`, `TrustMarkOwners` round trips | a Trust Mark type on the first line, then the JWT; or JSON |
+| `trust_mark`       | `TrustMarkEntry::validate`; `TrustMark`, `TrustMarkDelegation` and `TrustMarkStatusResponse` validate and round-trip; `TrustMarkIssuers`, `TrustMarkOwners` round trips | a Trust Mark type on the first line, then the JWT; or JSON |
 | `jwk`              | `Jwk` and `JwkSet` JSON, conversion to `jsonwebtoken` keys, `kid` lookup, signature-key selection, round trip                        | a JWK or JWK Set as JSON                           |
 | `entity_id`        | `UrlValidator::validate_entity_id` and `validate_endpoint_url`; a valid Entity Identifier prints and re-parses to itself; an `EntityId` keeps its spelling and equals the `EntityId` of its normalized URL | a URL |
 

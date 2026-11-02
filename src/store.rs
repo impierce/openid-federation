@@ -1,10 +1,11 @@
 //! What the issuing side reads from the application's storage: the Immediate Subordinates a
-//! Trust Anchor or Intermediate Entity registered, behind an async trait with an in-memory
-//! implementation (ADR 0005).
+//! Trust Anchor or Intermediate Entity registered, and the Trust Marks a Trust Mark Issuer issued,
+//! each behind an async trait with an in-memory implementation (ADR 0005).
 
 use crate::{
-    Constraints, EntityId, EntityMetadata, EntityType, JwkSet, PolicyOperators, StoreError, SubordinateStatement,
-    SubordinateStatementBuilder,
+    extract_claims_unverified, Constraints, EntityId, EntityMetadata, EntityType, FederationError, FederationResult,
+    JwkSet, JwtArtifactType, PolicyOperators, StoreError, SubordinateStatement, SubordinateStatementBuilder, TrustMark,
+    TrustMarkStatus,
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -222,6 +223,168 @@ impl SubordinateStore for InMemorySubordinateStore {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
+            .cloned()
+            .collect())
+    }
+}
+
+/// A Trust Mark as its issuer recorded it: the signed JWT, its claims, and when it was revoked.
+///
+/// Reference: OpenID Federation 1.0 - Section 7 Trust Marks
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-7>) and Section 8.4 Trust Mark
+/// Status (<https://openid.net/specs/openid-federation-1_0.html#section-8.4>)
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct IssuedTrustMark {
+    /// The signed Trust Mark JWT, as it was handed to its subject.
+    pub jwt: String,
+    /// The claims of `jwt`.
+    pub claims: TrustMark,
+    /// When the issuer revoked the Trust Mark, in seconds since the Unix epoch, or `None`.
+    pub revoked_at: Option<i64>,
+}
+
+impl IssuedTrustMark {
+    /// Records `jwt`, a Trust Mark the issuer signed, for example with
+    /// [`TrustMark::sign`](crate::TrustMark::sign), with its claims read from the JWT so the two
+    /// cannot differ.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidTrustMark`] when `jwt` is not a JWT typed `trust-mark+jwt` with
+    /// Trust Mark claims.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 7.1 Trust Mark Claims
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-7.1>)
+    pub fn from_jwt(jwt: impl Into<String>) -> FederationResult<Self> {
+        let jwt = jwt.into();
+        let claims = trust_mark_claims(&jwt)?;
+        Ok(Self {
+            jwt,
+            claims,
+            revoked_at: None,
+        })
+    }
+
+    /// The status of the Trust Mark at `now`: `revoked` once it was revoked, else `expired` from
+    /// its `exp` on, else `active`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.4.2 Trust Mark Status Response
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4.2>)
+    pub fn status_at(&self, now: i64) -> TrustMarkStatus {
+        if self.revoked_at.is_some() {
+            TrustMarkStatus::Revoked
+        } else if self.claims.exp.is_some_and(|exp| exp <= now) {
+            TrustMarkStatus::Expired
+        } else {
+            TrustMarkStatus::Active
+        }
+    }
+}
+
+/// The claims of `jwt`, which must be typed `trust-mark+jwt`, read without verifying the
+/// signature.
+pub(crate) fn trust_mark_claims(jwt: &str) -> FederationResult<TrustMark> {
+    let invalid = |reason: String| FederationError::InvalidTrustMark(format!("not a Trust Mark JWT: {reason}"));
+    let header = jsonwebtoken::decode_header(jwt).map_err(|err| invalid(err.to_string()))?;
+    JwtArtifactType::TrustMark
+        .validate_header_typ(header.typ.as_deref())
+        .map_err(|err| invalid(err.to_string()))?;
+    extract_claims_unverified(jwt).map_err(|err| invalid(err.to_string()))
+}
+
+/// Where a Trust Mark Issuer keeps the Trust Marks it issued.
+///
+/// The application implements it on its own database; [`InMemoryTrustMarkStore`] serves tests,
+/// examples and small deployments.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.4 Trust Mark Status
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4>), Section 8.5 Trust Marked
+/// Entities Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.5>) and
+/// Section 8.6 Trust Mark Endpoint
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.6>)
+#[async_trait]
+pub trait TrustMarkStore: Send + Sync {
+    /// The issued Trust Mark whose JWT is exactly `jwt`, or `None`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.4 Trust Mark Status
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4>)
+    async fn trust_mark(&self, jwt: &str) -> Result<Option<IssuedTrustMark>, StoreError>;
+
+    /// Every issued Trust Mark of `trust_mark_type`, revoked and expired ones included, in no
+    /// particular order.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.5 Trust Marked Entities Listing
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.5>) and Section 8.6 Trust
+    /// Mark Endpoint (<https://openid.net/specs/openid-federation-1_0.html#section-8.6>)
+    async fn trust_marks(&self, trust_mark_type: &str) -> Result<Vec<IssuedTrustMark>, StoreError>;
+}
+
+/// A [`TrustMarkStore`] in memory, for tests, examples and small deployments.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.4 Trust Mark Status
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4>)
+#[derive(Debug, Default)]
+pub struct InMemoryTrustMarkStore {
+    trust_marks: RwLock<HashMap<String, IssuedTrustMark>>,
+}
+
+impl InMemoryTrustMarkStore {
+    /// An empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records `trust_mark`, replacing and returning the record of the same JWT.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.4 Trust Mark Status
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4>)
+    pub fn insert(&self, trust_mark: IssuedTrustMark) -> Option<IssuedTrustMark> {
+        self.trust_marks
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(trust_mark.jwt.clone(), trust_mark)
+    }
+
+    /// Marks the Trust Mark whose JWT is `jwt` as revoked at `revoked_at`, keeping an earlier
+    /// revocation. Returns whether the store holds that Trust Mark.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.4.2 Trust Mark Status Response
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4.2>)
+    pub fn revoke(&self, jwt: &str, revoked_at: i64) -> bool {
+        match self
+            .trust_marks
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(jwt)
+        {
+            Some(trust_mark) => {
+                trust_mark.revoked_at.get_or_insert(revoked_at);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+#[async_trait]
+impl TrustMarkStore for InMemoryTrustMarkStore {
+    async fn trust_mark(&self, jwt: &str) -> Result<Option<IssuedTrustMark>, StoreError> {
+        Ok(self
+            .trust_marks
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(jwt)
+            .cloned())
+    }
+
+    async fn trust_marks(&self, trust_mark_type: &str) -> Result<Vec<IssuedTrustMark>, StoreError> {
+        Ok(self
+            .trust_marks
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter(|trust_mark| trust_mark.claims.trust_mark_type == trust_mark_type)
             .cloned()
             .collect())
     }

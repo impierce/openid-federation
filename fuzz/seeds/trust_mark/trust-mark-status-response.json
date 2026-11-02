@@ -1,0 +1,7 @@
+{
+  "iss": "https://www.agid.gov.it",
+  "trust_mark": "eyJ0eXAiOiJ0cnVzdC1tYXJrK2p3dCJ9.e30.c2ln",
+  "iat": 1759897995,
+  "status": "revoked",
+  "reason": "superseded"
+}

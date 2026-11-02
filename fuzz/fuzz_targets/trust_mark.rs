@@ -1,11 +1,13 @@
 //! Trust Marks (Trust Marks section): a `TrustMarkEntry` built from the first line as type and the
 //! rest as Trust Mark JWT validates without panicking, and `TrustMark`, `TrustMarkDelegation`,
-//! `TrustMarkIssuers` and `TrustMarkOwners` parsed from the whole input validate without panicking
-//! and survive a round trip through JSON.
+//! `TrustMarkStatusResponse`, `TrustMarkIssuers` and `TrustMarkOwners` parsed from the whole input
+//! validate without panicking and survive a round trip through JSON.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use openid_federation::{TrustMark, TrustMarkDelegation, TrustMarkEntry, TrustMarkIssuers, TrustMarkOwners};
+use openid_federation::{
+    TrustMark, TrustMarkDelegation, TrustMarkEntry, TrustMarkIssuers, TrustMarkOwners, TrustMarkStatusResponse,
+};
 
 fn roundtrip<T>(value: &T)
 where
@@ -33,6 +35,10 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(delegation) = serde_json::from_slice::<TrustMarkDelegation>(data) {
         let _ = delegation.validate();
         roundtrip(&delegation);
+    }
+    if let Ok(response) = serde_json::from_slice::<TrustMarkStatusResponse>(data) {
+        let _ = response.validate();
+        roundtrip(&response);
     }
     if let Ok(issuers) = serde_json::from_slice::<TrustMarkIssuers>(data) {
         roundtrip(&issuers);
