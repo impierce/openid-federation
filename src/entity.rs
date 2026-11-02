@@ -567,7 +567,7 @@ fn validate_entity_ids_for_signing(claims: &JwtClaims) -> FederationResult<()> {
     Ok(())
 }
 
-fn validate_entity_id_for_signing(claim: &str, entity_id: &EntityId) -> FederationResult<()> {
+pub(crate) fn validate_entity_id_for_signing(claim: &str, entity_id: &EntityId) -> FederationResult<()> {
     UrlValidator::validate_entity_id(entity_id.as_url())
         .map_err(|err| FederationError::Configuration(format!("{claim} {entity_id}: {err}")))
 }
