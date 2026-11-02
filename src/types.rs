@@ -51,6 +51,23 @@ impl EntityId {
     pub fn as_url(&self) -> &Url {
         &self.url
     }
+
+    /// Where the entity publishes its Entity Configuration: the Entity Identifier, including any
+    /// path and without a trailing `/`, followed by `/.well-known/openid-federation`.
+    ///
+    /// The client fetches from this URL, and an entity serves its configuration at its path, see
+    /// [`EntityConfigurationEndpoint::path`](crate::EntityConfigurationEndpoint::path).
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 9 Obtaining Federation Entity Configuration
+    /// Information (<https://openid.net/specs/openid-federation-1_0.html#section-9>)
+    pub fn entity_configuration_url(&self) -> Url {
+        let mut url = self.url.clone();
+        url.set_query(None);
+        url.set_fragment(None);
+        let path = format!("{}/.well-known/openid-federation", url.path().trim_end_matches('/'));
+        url.set_path(&path);
+        url
+    }
 }
 
 impl PartialEq for EntityId {

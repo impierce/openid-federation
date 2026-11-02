@@ -236,8 +236,7 @@ impl FederationClient {
     /// Reference: OpenID Federation 1.0 - Section 9 Obtaining Federation Entity Configuration Information
     /// <https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity->
     pub async fn fetch_entity_configuration(&self, entity_id: &EntityId) -> FederationResult<String> {
-        let well_known_url = self.build_well_known_url(entity_id)?;
-        self.fetch_text(well_known_url).await
+        self.fetch_text(entity_id.entity_configuration_url()).await
     }
 
     /// `GET` `url` and return the body of a 2xx response, or [`FederationError::Endpoint`].
@@ -680,20 +679,6 @@ impl FederationClient {
             .map(|entity_id| EntityId::parse(&entity_id))
             .collect()
     }
-
-    /// Build the well-known OpenID Federation URL for an entity: the Entity Identifier, including
-    /// any path and without a trailing `/`, followed by `/.well-known/openid-federation`.
-    ///
-    /// Reference: OpenID Federation 1.0 - Section 9 Obtaining Federation Entity Configuration Information
-    /// <https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity->
-    fn build_well_known_url(&self, entity_id: &EntityId) -> FederationResult<Url> {
-        let mut url = entity_id.as_url().clone();
-        url.set_query(None);
-        url.set_fragment(None);
-        let path = format!("{}/.well-known/openid-federation", url.path().trim_end_matches('/'));
-        url.set_path(&path);
-        Ok(url)
-    }
 }
 
 impl Default for FederationClient {
@@ -774,9 +759,9 @@ mod tests {
     use super::*;
 
     fn well_known_url(entity_id: &str) -> String {
-        FederationClient::new()
-            .build_well_known_url(&EntityId::parse(entity_id).unwrap())
+        EntityId::parse(entity_id)
             .unwrap()
+            .entity_configuration_url()
             .to_string()
     }
 
