@@ -85,6 +85,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | Subordinate listing endpoint handler (`ListEndpoint`): `entity_type` and `intermediate` filters; `trust_marked=true` and `trust_mark_type` answer `unsupported_parameter` |   ✅   | [Subordinate Listing](https://openid.net/specs/openid-federation-1_0.html#section-8.2)                                   | #39   |
 | Federation key rollover (`FederationKeys`): next, active, previous and retired keys, `jwks` and the active `Signer`; `KeyStore`, `InMemoryKeyStore` |   ✅   | [Key Rollover for a Trust Anchor](https://openid.net/specs/openid-federation-1_0.html#section-11.2)                      | #42   |
 | Historical keys endpoint handler (`HistoricalKeysEndpoint`): retired and revoked keys as a signed `jwk-set+jwt`; `HistoricalKeys`, `HistoricalKey`, `RevocationReason`; `FederationKeys::revoke` |   ✅   | [Federation Historical Keys Endpoint](https://openid.net/specs/openid-federation-1_0.html#section-8.7)                  | #43   |
+| Checking a candidate Subordinate before registering it (`FederationClient::check_candidate_subordinate`): self-signed configuration, `authority_hints` names the Superior, publishable `jwks`, naming constraints, metadata policy; every failing check in a `CandidateReport`, which becomes a `Subordinate` |   ✅   | [Federation Establishment](https://openid.net/specs/openid-federation-1_0.html#appendix-A.1)                              | #46   |
 
 ## JOSE
 

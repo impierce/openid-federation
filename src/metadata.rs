@@ -511,6 +511,28 @@ impl EntityMetadata {
         }
     }
 
+    /// The Entity Types this metadata has a member for, the standard ones first, in the order of
+    /// Section 5.1, then the others by name.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 5.1 Entity Type Identifiers
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-5.1>
+    pub fn entity_types(&self) -> Vec<EntityType> {
+        let mut others: Vec<&String> = self.extensions.keys().collect();
+        others.sort();
+        [
+            EntityType::FederationEntity,
+            EntityType::OpenIdRelyingParty,
+            EntityType::OpenIdProvider,
+            EntityType::OauthAuthorizationServer,
+            EntityType::OauthClient,
+            EntityType::OauthResource,
+        ]
+        .into_iter()
+        .filter(|entity_type| self.has_entity_type(entity_type))
+        .chain(others.into_iter().map(|name| EntityType::Other(name.clone())))
+        .collect()
+    }
+
     /// Check if the metadata contains information for a specific entity type.
     pub fn has_entity_type(&self, entity_type: &EntityType) -> bool {
         match entity_type {
