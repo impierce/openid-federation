@@ -80,6 +80,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | ---------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------ | ----- |
 | Entity Configuration endpoint handler (`EntityConfigurationEndpoint`): re-signed before `exp`, mount path from the Entity Identifier |   ✅   | [Obtaining Federation Entity Configuration Information](https://openid.net/specs/openid-federation-1_0.html#section-9)   | #37   |
 | Fetch endpoint handler (`FetchEndpoint`) over a `SubordinateStore`, with `InMemorySubordinateStore`; `EndpointRequest` |   ✅   | [Fetching a Subordinate Statement](https://openid.net/specs/openid-federation-1_0.html#section-8.1)                      | #38   |
+| Subordinate listing endpoint handler (`ListEndpoint`): `entity_type` and `intermediate` filters; `trust_marked=true` and `trust_mark_type` answer `unsupported_parameter` |   ✅   | [Subordinate Listing](https://openid.net/specs/openid-federation-1_0.html#section-8.2)                                   | #39   |
 
 ## JOSE
 

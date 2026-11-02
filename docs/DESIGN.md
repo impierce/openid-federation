@@ -32,7 +32,8 @@ openid-federation/
 │   ├── endpoint.rs      # EndpointRequest, EndpointResponse, ErrorCode, ErrorResponse (Section 8.9)
 │   ├── endpoint/
 │   │   ├── entity_configuration.rs  # EntityConfigurationEndpoint (Section 9)
-│   │   └── fetch.rs     # FetchEndpoint (Section 8.1)
+│   │   ├── fetch.rs     # FetchEndpoint (Section 8.1)
+│   │   └── list.rs      # ListEndpoint (Section 8.2)
 │   ├── store.rs         # Subordinate, SubordinateStore, InMemorySubordinateStore
 │   └── error.rs         # FederationError, EndpointError, FederationResult
 ├── fuzz/                # cargo-fuzz targets; a workspace of its own
