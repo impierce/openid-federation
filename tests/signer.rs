@@ -407,8 +407,14 @@ async fn additional_claim_repeating_a_typed_claim_is_refused() {
         .claims
         .additional
         .insert("iss".to_string(), serde_json::json!("https://attacker.example"));
+    // The Subordinate Statement producer rules refuse it before the duplicate-claim check runs.
     let error = statement.sign(&signer).await.unwrap_err();
-    assert!(error.to_string().contains("\"iss\" appears more than once"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("\"iss\" is a claim the specification defines"),
+        "{error}"
+    );
 
     let mut configuration =
         EntityConfiguration::new(anchor_id, public_jwks(EC_P256_JWK, "ta-key"), now() + 3600, now());
@@ -416,7 +422,8 @@ async fn additional_claim_repeating_a_typed_claim_is_refused() {
         .claims
         .additional
         .insert("jwks".to_string(), serde_json::json!({ "keys": [] }));
-    assert!(configuration.sign(&signer).await.is_err());
+    let error = configuration.sign(&signer).await.unwrap_err();
+    assert!(error.to_string().contains("\"jwks\" appears more than once"), "{error}");
 
     assert_eq!(signer.calls(), 0, "the signer must not be called");
 }

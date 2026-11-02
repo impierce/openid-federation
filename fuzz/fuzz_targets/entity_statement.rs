@@ -1,7 +1,7 @@
 //! Entity Statements as JSON (Entity Statement section): arbitrary bytes deserialize into an
 //! `EntityConfiguration`, a `SubordinateStatement` or an `EntityMetadata` without panicking,
-//! `validate` never panics on what parses, and whatever parses serializes back to a value that
-//! parses to the same statement.
+//! `validate` and `SubordinateStatement::builder` never panic on what parses, and whatever parses
+//! serializes back to a value that parses to the same statement.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
@@ -21,7 +21,18 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(configuration) = serde_json::from_slice::<EntityConfiguration>(data) {
         let _ = configuration.validate();
         let subject = EntityId::parse("https://subject.example").expect("a fixed Entity Identifier parses");
-        let _ = configuration.to_subordinate_statement(subject).validate();
+        // A Superior issuing a statement about the configuration's entity, carrying its claims
+        // through the builder's producer checks.
+        let mut builder = SubordinateStatement::builder(subject, configuration.claims.sub.clone(), configuration.jwks.clone())
+            .issued_at(configuration.claims.iat)
+            .expires_at(configuration.claims.exp);
+        for (name, value) in &configuration.claims.additional {
+            builder = builder.extension_claim(name.clone(), value.clone());
+        }
+        if let Some(crit) = &configuration.crit {
+            builder = builder.crit(crit.clone());
+        }
+        let _ = builder.build();
         roundtrip(&configuration);
     }
     if let Ok(statement) = serde_json::from_slice::<SubordinateStatement>(data) {
