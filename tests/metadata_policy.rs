@@ -277,6 +277,10 @@ fn builder_refuses_a_malformed_metadata_policy() {
     .unwrap();
     let error = builder.metadata_policy(malformed).build().unwrap_err();
     assert!(
+        matches!(error, FederationError::InvalidSubordinateStatement(_)),
+        "a failed producer rule is reported like the others: {error:?}"
+    );
+    assert!(
         error.to_string().contains("openid_relying_party.subject_type"),
         "{error}"
     );

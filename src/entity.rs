@@ -289,7 +289,11 @@ impl SubordinateStatement {
         }
 
         if let Some(metadata_policy) = &self.metadata_policy {
-            crate::validate_metadata_policy(metadata_policy, &[])?;
+            // A producer rule like the others here, reported as the statement being invalid.
+            crate::validate_metadata_policy(metadata_policy, &[]).map_err(|err| match err {
+                FederationError::InvalidMetadata(message) => FederationError::InvalidSubordinateStatement(message),
+                other => other,
+            })?;
         }
 
         if let Some(operators) = &self.metadata_policy_crit {
