@@ -25,7 +25,7 @@ openid-federation/
 │   ├── entity.rs        # EntityConfiguration, SubordinateStatement: constructors, validate, from_verified_jwt
 │   ├── trust_chain.rs   # TrustChain: try_new (authentication), expiration, leaf and anchor accessors
 │   ├── jwt.rs           # JwtArtifactType (`typ` headers), JwtClaims, NumericDate, JwtProcessor, extract_claims_unverified
-│   ├── jwk.rs           # Jwk, JwkSet and their conversion to jsonwebtoken keys
+│   ├── jwk.rs           # Jwk, JwkSet and their conversion to jsonwebtoken keys; HistoricalKeys (Section 8.7.2)
 │   ├── metadata.rs      # EntityMetadata and the metadata type of each entity type
 │   ├── types.rs         # EntityId, EntityType, TrustMarkEntry, TrustMark, TrustMarkIssuers, TrustMarkOwners, MetadataPolicy, PolicyOperators (validate_metadata_policy), Constraints, NamingConstraints
 │   ├── utils.rs         # HttpClient, HttpResponse, FederationClient (fetch, resolve, discover, list), TrustChainDiscovery, UrlValidator
@@ -33,6 +33,7 @@ openid-federation/
 │   ├── endpoint/
 │   │   ├── entity_configuration.rs  # EntityConfigurationEndpoint (Section 9)
 │   │   ├── fetch.rs     # FetchEndpoint (Section 8.1)
+│   │   ├── historical_keys.rs  # HistoricalKeysEndpoint (Section 8.7)
 │   │   └── list.rs      # ListEndpoint (Section 8.2)
 │   ├── store.rs         # Subordinate, SubordinateStore, InMemorySubordinateStore
 │   ├── keys.rs          # FederationKeys across rollover (Section 11.2), KeyStore, InMemoryKeyStore

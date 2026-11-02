@@ -30,7 +30,7 @@ pub mod utils;
 pub use endpoint::*;
 pub use entity::*;
 pub use error::*;
-pub use jwk::{Jwk, JwkSet};
+pub use jwk::{HistoricalKey, HistoricalKeys, Jwk, JwkSet, KeyRevocation, RevocationReason};
 pub use jwt::*;
 pub use keys::*;
 pub use metadata::*;

@@ -68,7 +68,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | Fetch endpoint client (`fetch_subordinate_statement`)                                                |   ✅   | [Fetching a Subordinate Statement](https://openid.net/specs/openid-federation-1_0.html#fetch_endpoint)                  |       |
 | List endpoint client (`list_entities`)                                                               |   ✅   | [Subordinate Listing](https://openid.net/specs/openid-federation-1_0.html#entity_listing)                             |       |
 | Resolve endpoint client and `resolve-response+jwt`                                                    |   📋   | [Resolve Entity](https://openid.net/specs/openid-federation-1_0.html#resolve)                   |       |
-| Historical keys endpoint client and `jwk-set+jwt`                                                     |   📋   | [Federation Historical Keys Endpoint](https://openid.net/specs/openid-federation-1_0.html#historical_keys)                  |       |
+| Historical keys endpoint client (the types and `HistoricalKeys::from_verified_jwt` exist, #43)        |   📋   | [Federation Historical Keys Endpoint](https://openid.net/specs/openid-federation-1_0.html#historical_keys)                  |       |
 | Anchored trust chain discovery towards given Trust Anchors (`discover_trust_chain`)                  |   ✅   | [Fetching Entity Statements to Establish a Trust Chain](https://openid.net/specs/openid-federation-1_0.html#fetching-es)           |       |
 | All-chains discovery with every skipped branch reported (`discover_all_trust_chains_with_failures`)   |   ✅   | [Fetching Entity Statements to Establish a Trust Chain](https://openid.net/specs/openid-federation-1_0.html#fetching-es)           |       |
 | Trust chain authentication top-down (`TrustChain::try_new`)                                          |   ✅   | [Validating a Trust Chain](https://openid.net/specs/openid-federation-1_0.html#trust_chain_validation)           |       |
@@ -84,6 +84,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | Fetch endpoint handler (`FetchEndpoint`) over a `SubordinateStore`, with `InMemorySubordinateStore`; `EndpointRequest` |   ✅   | [Fetching a Subordinate Statement](https://openid.net/specs/openid-federation-1_0.html#section-8.1)                      | #38   |
 | Subordinate listing endpoint handler (`ListEndpoint`): `entity_type` and `intermediate` filters; `trust_marked=true` and `trust_mark_type` answer `unsupported_parameter` |   ✅   | [Subordinate Listing](https://openid.net/specs/openid-federation-1_0.html#section-8.2)                                   | #39   |
 | Federation key rollover (`FederationKeys`): next, active, previous and retired keys, `jwks` and the active `Signer`; `KeyStore`, `InMemoryKeyStore` |   ✅   | [Key Rollover for a Trust Anchor](https://openid.net/specs/openid-federation-1_0.html#section-11.2)                      | #42   |
+| Historical keys endpoint handler (`HistoricalKeysEndpoint`): retired and revoked keys as a signed `jwk-set+jwt`; `HistoricalKeys`, `HistoricalKey`, `RevocationReason`; `FederationKeys::revoke` |   ✅   | [Federation Historical Keys Endpoint](https://openid.net/specs/openid-federation-1_0.html#section-8.7)                  | #43   |
 
 ## JOSE
 

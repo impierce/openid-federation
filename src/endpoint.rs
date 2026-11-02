@@ -6,18 +6,21 @@
 //! [`EndpointRequest`], a handler answers it with an [`EndpointResponse`], and the application
 //! turns its status, content type and body into the response of its own framework.
 //! [`EntityConfigurationEndpoint`] serves an entity's Entity Configuration (Section 9),
-//! [`FetchEndpoint`] serves Subordinate Statements (Section 8.1) and [`ListEndpoint`] lists the
-//! Immediate Subordinates (Section 8.2).
+//! [`FetchEndpoint`] serves Subordinate Statements (Section 8.1), [`ListEndpoint`] lists the
+//! Immediate Subordinates (Section 8.2) and [`HistoricalKeysEndpoint`] publishes the entity's
+//! previous keys (Section 8.7).
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
 mod entity_configuration;
 mod fetch;
+mod historical_keys;
 mod list;
 
 pub use entity_configuration::*;
 pub use fetch::*;
+pub use historical_keys::*;
 pub use list::*;
 
 /// The content type of an [`ErrorResponse`] and of the other JSON responses of the federation
@@ -34,6 +37,12 @@ pub const JSON_CONTENT_TYPE: &str = "application/json";
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1.2>) and Section 9.2
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-9.2>)
 pub const ENTITY_STATEMENT_CONTENT_TYPE: &str = "application/entity-statement+jwt";
+
+/// The content type of a successful historical keys response: a signed JWK Set.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>)
+pub const JWK_SET_CONTENT_TYPE: &str = "application/jwk-set+jwt";
 
 /// What a federation endpoint handler answers: the HTTP status, the content type and the body.
 ///

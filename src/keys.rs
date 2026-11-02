@@ -23,7 +23,9 @@
 //! Exactly one key is [`KeyState::Active`] at any time. A [`KeyStore`] persists the key records
 //! between restarts; the private keys stay behind the application's [`Signer`]s.
 
-use crate::{FederationError, FederationResult, Jwk, JwkSet, Signer, StoreError};
+use crate::{
+    FederationError, FederationResult, HistoricalKey, Jwk, JwkSet, KeyRevocation, RevocationReason, Signer, StoreError,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -64,6 +66,9 @@ pub struct KeyRecord {
     /// When the key was retired, as a NumericDate; `None` until it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retired_at: Option<i64>,
+    /// The revocation, if the key was revoked (Section 8.7.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked: Option<KeyRevocation>,
 }
 
 impl KeyRecord {
@@ -73,6 +78,20 @@ impl KeyRecord {
     /// <https://openid.net/specs/openid-federation-1_0.html#section-3.1.1>
     pub fn kid(&self) -> &str {
         self.public_key.kid.as_deref().unwrap_or_default()
+    }
+
+    /// The key as the historical keys endpoint publishes it, if it is retired: expiring when it
+    /// was retired, with its revocation if it was revoked.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
+    pub fn to_historical_key(&self) -> Option<HistoricalKey> {
+        if self.state != KeyState::Retired {
+            return None;
+        }
+        let mut historical = HistoricalKey::new(self.public_key.clone(), self.retired_at?);
+        historical.revoked = self.revoked.clone();
+        Some(historical)
     }
 }
 
@@ -117,8 +136,9 @@ impl FederationKeys {
     ///
     /// # Errors
     ///
-    /// [`FederationError::Configuration`] when the records do not have exactly one active key or
-    /// repeat a `kid`, when two signers share a `kid`, or when the active key or a next key has no
+    /// [`FederationError::Configuration`] when the records do not have exactly one active key,
+    /// repeat a `kid` or carry a revocation for a key that is not retired, when two signers share
+    /// a `kid`, or when the active key or a next key has no
     /// signer in `signers`; the errors of [`JwkSet::validate`] for a published key that cannot be
     /// published, and of [`Jwk::to_decoding_key`] for one that has no usable key material.
     ///
@@ -142,6 +162,25 @@ impl FederationKeys {
             if !kids.insert(record.kid()) {
                 return Err(key_error(format!("kid {:?} appears more than once", record.kid())));
             }
+        }
+        if let Some(record) = records
+            .iter()
+            .find(|record| record.state == KeyState::Retired && record.retired_at.is_none())
+        {
+            return Err(key_error(format!(
+                "the retired key {:?} has no retired_at",
+                record.kid()
+            )));
+        }
+        if let Some(record) = records
+            .iter()
+            .find(|record| record.state != KeyState::Retired && record.revoked.is_some())
+        {
+            // `jwks` would publish a revoked key.
+            return Err(key_error(format!(
+                "the key {:?} is revoked but not retired",
+                record.kid()
+            )));
         }
         let active = records.iter().filter(|record| record.state == KeyState::Active).count();
         if active != 1 {
@@ -206,6 +245,7 @@ impl FederationKeys {
             public_key,
             state,
             retired_at: None,
+            revoked: None,
         });
         self.signers.insert(kid, signer);
         Ok(())
@@ -251,6 +291,30 @@ impl FederationKeys {
         record.state = KeyState::Retired;
         record.retired_at = Some(retired_at);
         self.signers.remove(kid);
+        Ok(())
+    }
+
+    /// Revokes the key `kid` at `revoked_at`, a NumericDate, for `reason` if given, so the
+    /// historical keys endpoint reports it as revoked. A retired key, even one that has long
+    /// expired, can be revoked, for a compromise discovered later (Section 8.7). A previous or
+    /// next key is retired at `revoked_at` as well, which removes it from [`jwks`](Self::jwks).
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::Configuration`] when `kid` is the active key, which must be replaced
+    /// with [`activate`](Self::activate) first, or is already revoked.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.7 Federation Historical Keys Endpoint
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7>
+    pub fn revoke(&mut self, kid: &str, revoked_at: i64, reason: Option<RevocationReason>) -> FederationResult<()> {
+        self.require_state(kid, &[KeyState::Previous, KeyState::Next, KeyState::Retired], "revoked")?;
+        if self.record_mut(kid).revoked.is_some() {
+            return Err(key_error(format!("the key {kid:?} is already revoked")));
+        }
+        if self.record_mut(kid).state != KeyState::Retired {
+            self.retire(kid, revoked_at)?;
+        }
+        self.record_mut(kid).revoked = Some(KeyRevocation::new(revoked_at, reason));
         Ok(())
     }
 
@@ -315,6 +379,14 @@ impl FederationKeys {
     /// <https://openid.net/specs/openid-federation-1_0.html#section-11.2>
     pub fn records(&self) -> &[KeyRecord] {
         &self.records
+    }
+
+    /// The retired keys as the historical keys endpoint publishes them.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
+    pub fn historical_keys(&self) -> Vec<HistoricalKey> {
+        self.records.iter().filter_map(KeyRecord::to_historical_key).collect()
     }
 
     /// The retired keys, with when each was retired.
