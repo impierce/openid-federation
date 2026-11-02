@@ -236,3 +236,60 @@ async fn key_store_persists_records_and_signers_are_supplied_on_load() {
     assert_eq!(json[0]["state"], "previous");
     assert_eq!(json[1]["state"], "active");
 }
+
+/// A restart in the middle of a rollover, between steps 1 and 3: the next key's signer is
+/// restored with it, so the rollover can continue.
+#[test]
+fn restored_next_key_can_be_activated() {
+    let (old_signer, old_public) = old_key();
+    let mut keys = FederationKeys::new(old_signer, old_public).unwrap();
+    let (new_signer, new_public) = new_key();
+    keys.add_next(new_signer, new_public).unwrap();
+    let records = keys.records().to_vec();
+
+    let (old_signer, _) = old_key();
+    let (new_signer, _) = new_key();
+    let mut restored = FederationKeys::from_records(records, [old_signer, new_signer]).unwrap();
+    restored.activate("ta-2026").unwrap();
+
+    assert_eq!(restored.active_signer().kid(), "ta-2026");
+}
+
+#[test]
+fn two_signers_for_one_kid_are_refused_on_restore() {
+    let (old_signer, old_public) = old_key();
+    let keys = FederationKeys::new(old_signer, old_public).unwrap();
+    let records = keys.records().to_vec();
+
+    let (first, _) = old_key();
+    let (second, _) = old_key();
+    let error = FederationKeys::from_records(records, [first, second]).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("more than one signer for the kid \"ta-2025\""),
+        "{error}"
+    );
+}
+
+#[test]
+fn key_without_key_material_is_refused() {
+    let (old_signer, old_public) = old_key();
+    let mut keys = FederationKeys::new(old_signer, old_public).unwrap();
+    let (new_signer, mut incomplete) = new_key();
+    incomplete.x = None;
+
+    assert!(keys.add_next(new_signer, incomplete.clone()).is_err());
+    assert_eq!(kids(&keys.jwks()), ["ta-2025"], "nothing was added");
+
+    let (new_signer, _) = new_key();
+    assert!(FederationKeys::new(new_signer.clone(), incomplete.clone()).is_err());
+
+    // A stored record without key material is refused on restore too.
+    let mut records = keys.records().to_vec();
+    records[0].public_key.x = None;
+    records[0].public_key.y = None;
+    let (old_signer, _) = old_key();
+    assert!(FederationKeys::from_records(records, [old_signer]).is_err());
+}
