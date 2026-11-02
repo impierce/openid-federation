@@ -5,13 +5,16 @@
 //! The crate depends on no web framework (ADR 0005). The application parses each request into an
 //! [`EndpointRequest`], a handler answers it with an [`EndpointResponse`], and the application
 //! turns its status, content type and body into the response of its own framework.
+//! [`EntityConfigurationEndpoint`] serves an entity's Entity Configuration (Section 9) and
 //! [`FetchEndpoint`] serves Subordinate Statements (Section 8.1).
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
+mod entity_configuration;
 mod fetch;
 
+pub use entity_configuration::*;
 pub use fetch::*;
 
 /// The content type of an [`ErrorResponse`] and of the other JSON responses of the federation
