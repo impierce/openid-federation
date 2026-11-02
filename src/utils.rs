@@ -22,7 +22,9 @@ use async_trait::async_trait;
 pub trait HttpClient: Send + Sync {
     /// Send a `GET` request to `url` and return the response, whatever its status.
     ///
-    /// Return an error only when no response arrived (a network failure, for example).
+    /// Return an error when no response arrived (a network failure, for example). An
+    /// implementation may also return an error when the body of a 2xx response cannot be read;
+    /// [`ReqwestHttpClient`] does, and returns an empty body for an unreadable error response.
     /// [`FederationClient`] turns a status other than 2xx into [`FederationError::Endpoint`],
     /// reading the error response of OpenID Federation 1.0,
     /// [Section 8.9](https://openid.net/specs/openid-federation-1_0.html#section-8.9), from the
@@ -94,19 +96,37 @@ impl HttpResponse {
 ///
 /// The body of a response with a status other than 2xx is read up to 64 KiB; a longer body, or
 /// one that cannot be read, is returned empty, so [`FederationClient`] still reports the status.
+///
+/// [`ReqwestHttpClient::new`] gives every request a deadline of 30 seconds, from connecting until
+/// the body is read, so a federation entity that stops sending cannot hold a fetch forever.
 pub struct ReqwestHttpClient {
     client: Client,
+    timeout: Option<std::time::Duration>,
 }
 
+/// The deadline [`ReqwestHttpClient::new`] gives every request.
+const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl ReqwestHttpClient {
-    /// Create a new `ReqwestHttpClient` with the default `reqwest::Client`.
+    /// Create a new `ReqwestHttpClient` with the default `reqwest::Client` and a deadline of 30
+    /// seconds per request, body included.
     pub fn new() -> Self {
-        Self { client: Client::new() }
+        Self {
+            client: Client::new(),
+            timeout: Some(DEFAULT_TIMEOUT),
+        }
     }
 
-    /// Create a `ReqwestHttpClient` with a custom `reqwest::Client`.
+    /// Create a `ReqwestHttpClient` with a custom `reqwest::Client`. The client's own timeouts
+    /// apply; no deadline is added unless [`with_timeout`](Self::with_timeout) sets one.
     pub fn with_client(client: Client) -> Self {
-        Self { client }
+        Self { client, timeout: None }
+    }
+
+    /// Give every request a deadline of `timeout`, from connecting until the body is read.
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
     }
 }
 
@@ -138,7 +158,11 @@ async fn read_error_body(response: &mut reqwest::Response) -> String {
 #[async_trait]
 impl HttpClient for ReqwestHttpClient {
     async fn get(&self, url: Url) -> FederationResult<HttpResponse> {
-        let mut response = self.client.get(url).send().await?;
+        let mut request = self.client.get(url);
+        if let Some(timeout) = self.timeout {
+            request = request.timeout(timeout);
+        }
+        let mut response = request.send().await?;
         let status = response.status().as_u16();
         let content_type = response
             .headers()

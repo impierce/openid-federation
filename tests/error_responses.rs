@@ -194,3 +194,91 @@ async fn oversized_error_body_is_discarded() {
     assert_eq!(error.status, 404);
     assert_eq!(error.response, None);
 }
+
+#[tokio::test]
+async fn stalled_error_body_ends_at_the_deadline() {
+    use openid_federation::ReqwestHttpClient;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // A server that sends an error status and part of its body, then stops sending.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 1024];
+        let _ = socket.read(&mut request).await;
+        socket
+            .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 100\r\n\r\n{\"error\":")
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    });
+
+    let fetch_endpoint = Url::parse(&format!("http://{address}/fetch")).unwrap();
+    let subject = EntityId::parse("https://op.example.org").unwrap();
+    let client = ReqwestHttpClient::new().with_timeout(std::time::Duration::from_millis(300));
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        FederationClient::with_http_client(client).fetch_subordinate_statement(&fetch_endpoint, &subject),
+    )
+    .await
+    .expect("the deadline ends the stalled read")
+    .unwrap_err();
+
+    let error = endpoint_error(error);
+    assert_eq!(error.status, 503);
+    assert_eq!(error.response, None);
+}
+
+#[tokio::test]
+async fn error_body_of_exactly_the_limit_is_parsed() {
+    // A valid error response padded to exactly 64 KiB, the most the client reads.
+    let json = r#"{"error":"not_found","error_description":"Unknown subject"}"#;
+    let body = format!("{json}{}", " ".repeat(64 * 1024 - json.len()));
+    assert_eq!(body.len(), 64 * 1024);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/fetch"))
+        .respond_with(ResponseTemplate::new(404).set_body_raw(body, "application/json"))
+        .mount(&server)
+        .await;
+
+    let fetch_endpoint = Url::parse(&format!("{}/fetch", server.uri())).unwrap();
+    let subject = EntityId::parse("https://op.example.org").unwrap();
+    let error = endpoint_error(
+        FederationClient::new()
+            .fetch_subordinate_statement(&fetch_endpoint, &subject)
+            .await
+            .unwrap_err(),
+    );
+
+    assert_eq!(error.status, 404);
+    assert_eq!(
+        error.response,
+        Some(ErrorResponse::new(ErrorCode::NotFound, "Unknown subject"))
+    );
+}
+
+#[tokio::test]
+async fn custom_http_client_success_is_any_2xx() {
+    struct Created;
+
+    #[async_trait::async_trait]
+    impl HttpClient for Created {
+        async fn get(&self, _url: Url) -> openid_federation::FederationResult<HttpResponse> {
+            Ok(HttpResponse::new(
+                201,
+                Some("application/entity-statement+jwt".to_string()),
+                "a.b.c",
+            ))
+        }
+    }
+
+    let fetch_endpoint = Url::parse("https://ta.example.org/fetch").unwrap();
+    let subject = EntityId::parse("https://op.example.org").unwrap();
+    let body = FederationClient::with_http_client(Created)
+        .fetch_subordinate_statement(&fetch_endpoint, &subject)
+        .await
+        .unwrap();
+    assert_eq!(body, "a.b.c");
+}
