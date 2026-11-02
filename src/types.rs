@@ -1,7 +1,7 @@
 //! Common types used throughout the OpenID Federation implementation.
 
 use crate::entity::validate_entity_id_for_signing;
-use crate::jwt::numeric_date;
+use crate::jwt::{numeric_date, CLOCK_SKEW_LEEWAY};
 use crate::{
     extract_claims_unverified, sign_federation_jwt, FederationError, FederationResult, JwkSet, JwtArtifactType, Signer,
 };
@@ -303,7 +303,8 @@ impl TrustMark {
     }
 
     /// Validate the syntax of the Trust Mark: `trust_mark_type` is not empty, no additional claim
-    /// takes a name Section 7.1 defines, and the Trust Mark has not expired.
+    /// takes a name Section 7.1 defines, `iat` is not in the future, and `exp`, if any, is neither
+    /// in the past nor at or before `iat`, allowing 60 seconds of clock skew.
     ///
     /// A `delegation` must be a JWT typed `trust-mark-delegation+jwt` that names its signing key in
     /// `kid`, whose claims pass [`TrustMarkDelegation::validate`], whose `trust_mark_type` equals the
@@ -324,6 +325,7 @@ impl TrustMark {
         validate_trust_mark_claims(
             "Trust Mark",
             &self.trust_mark_type,
+            self.iat,
             self.exp,
             &self.additional,
             TRUST_MARK_CLAIMS,
@@ -455,7 +457,8 @@ impl TrustMarkDelegation {
     }
 
     /// Validate the syntax of the delegation: `trust_mark_type` is not empty, no additional claim
-    /// takes a name Section 7.2.1 defines, and the delegation has not expired.
+    /// takes a name Section 7.2.1 defines, `iat` is not in the future, and `exp`, if any, is
+    /// neither in the past nor at or before `iat`, allowing 60 seconds of clock skew.
     ///
     /// This does not verify a signature, nor that the owner is listed in `trust_mark_owners`
     /// (Section 7.2.2).
@@ -470,6 +473,7 @@ impl TrustMarkDelegation {
         validate_trust_mark_claims(
             "Trust Mark delegation",
             &self.trust_mark_type,
+            self.iat,
             self.exp,
             &self.additional,
             TRUST_MARK_DELEGATION_CLAIMS,
@@ -501,10 +505,12 @@ impl TrustMarkDelegation {
 }
 
 /// The checks a Trust Mark and a Trust Mark delegation share: a non-empty `trust_mark_type`, no
-/// additional claim named after one of `claims`, and an `exp`, if any, not in the past.
+/// additional claim named after one of `claims`, an `iat` not in the future, and an `exp`, if
+/// any, neither in the past nor at or before `iat`. The time checks allow the crate's clock skew.
 fn validate_trust_mark_claims(
     kind: &str,
     trust_mark_type: &str,
+    iat: i64,
     exp: Option<i64>,
     additional: &HashMap<String, serde_json::Value>,
     claims: &[&str],
@@ -520,9 +526,20 @@ fn validate_trust_mark_claims(
             "{kind} of type {trust_mark_type}: additional claim {name:?} is a claim the specification defines"
         )));
     }
-    if exp.is_some_and(|exp| exp < chrono::Utc::now().timestamp()) {
+    let now = chrono::Utc::now().timestamp();
+    if iat > now.saturating_add(CLOCK_SKEW_LEEWAY) {
+        return Err(FederationError::InvalidTrustMark(format!(
+            "{kind} of type {trust_mark_type} is issued in the future"
+        )));
+    }
+    if exp.is_some_and(|exp| exp < now.saturating_sub(CLOCK_SKEW_LEEWAY)) {
         return Err(FederationError::InvalidTrustMark(format!(
             "{kind} of type {trust_mark_type} has expired"
+        )));
+    }
+    if exp.is_some_and(|exp| exp <= iat) {
+        return Err(FederationError::InvalidTrustMark(format!(
+            "{kind} of type {trust_mark_type} expires at or before its iat"
         )));
     }
     Ok(())

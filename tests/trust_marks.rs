@@ -5,12 +5,11 @@
 //! The keys in `tests/data/signer/` are test fixtures generated once for the signer suite. They
 //! protect nothing.
 
-use jsonwebtoken::{Algorithm, Validation};
+use jsonwebtoken::Algorithm;
 use openid_federation::{
     extract_claims_unverified, sign_federation_jwt, EntityConfiguration, EntityId, FederationError, InMemorySigner,
     Jwk, JwkSet, JwtArtifactType, JwtProcessor, TrustMark, TrustMarkDelegation,
 };
-use std::collections::HashSet;
 
 const EC_P256_DER: &[u8] = include_bytes!("data/signer/ec-p256.pkcs8.der");
 const EC_P256_JWK: &str = include_str!("data/signer/ec-p256.public.jwk.json");
@@ -37,12 +36,10 @@ fn public_jwks(kid: &str) -> JwkSet {
     jwks
 }
 
-/// Verifies `jwt` against `jwks` as `artifact_type`, without requiring `exp`: Trust Marks and
-/// delegations may omit it.
+/// Verifies `jwt` against `jwks` as `artifact_type` with the crate's default processor, which
+/// does not require `exp` of Trust Marks and delegations.
 fn verify<T: for<'de> serde::Deserialize<'de>>(jwt: &str, jwks: &JwkSet, artifact_type: JwtArtifactType) -> T {
-    let mut validation = Validation::new(Algorithm::ES256);
-    validation.required_spec_claims = HashSet::new();
-    JwtProcessor::with_validation(validation)
+    JwtProcessor::new()
         .verify_jwt_with_jwks(jwt, jwks, artifact_type)
         .unwrap()
 }
@@ -335,7 +332,7 @@ async fn delegation_for_another_type_or_issuer_is_refused() {
     assert_invalid(trust_mark.validate(), "delegates to https://other-tmi.example.org");
 
     let mut expired = delegation();
-    expired.exp = Some(now() - 60);
+    expired.exp = Some(now() - 3600);
     let expired_jwt = sign_federation_jwt(&expired, JwtArtifactType::TrustMarkDelegation, &owner)
         .await
         .unwrap();
@@ -422,13 +419,13 @@ async fn malformed_trust_mark_or_delegation_is_not_signed() {
     extension.sign(&signer).await.unwrap();
 
     let mut expired = trust_mark();
-    expired.exp = Some(now() - 60);
+    expired.exp = Some(now() - 3600);
     assert_invalid(
         expired.sign(&signer).await,
         "Trust Mark of type https://refeds.org/sirtfi has expired",
     );
     let mut expired = delegation();
-    expired.exp = Some(now() - 60);
+    expired.exp = Some(now() - 3600);
     assert_invalid(expired.sign(&signer).await, "has expired");
 
     for (claim, trust_mark) in [
@@ -460,4 +457,63 @@ async fn malformed_trust_mark_or_delegation_is_not_signed() {
         http_owner.sign(&signer).await,
         Err(FederationError::Configuration(_))
     ));
+}
+
+#[tokio::test]
+async fn time_claims_are_checked_with_clock_skew() {
+    let signer = signer("key");
+
+    // Within the clock skew, an `exp` just passed and an `iat` just ahead are accepted.
+    let mut skewed = trust_mark();
+    skewed.iat = now() + 30;
+    skewed.exp = Some(now() + 3600);
+    skewed.validate().unwrap();
+    let mut skewed = delegation();
+    skewed.iat = now() - 3600;
+    skewed.exp = Some(now() - 30);
+    skewed.validate().unwrap();
+
+    let mut future = trust_mark();
+    future.iat = now() + 3600;
+    assert_invalid(
+        future.sign(&signer).await,
+        "Trust Mark of type https://refeds.org/sirtfi is issued in the future",
+    );
+    let mut future = delegation();
+    future.iat = now() + 3600;
+    assert_invalid(
+        future.sign(&signer).await,
+        "Trust Mark delegation of type https://refeds.org/sirtfi is issued in the future",
+    );
+
+    for exp in [now() + 10, now() + 30] {
+        let mut inverted = trust_mark();
+        inverted.iat = now() + 30;
+        inverted.exp = Some(exp);
+        assert_invalid(
+            inverted.sign(&signer).await,
+            "Trust Mark of type https://refeds.org/sirtfi expires at or before its iat",
+        );
+        let mut inverted = delegation();
+        inverted.iat = now() + 30;
+        inverted.exp = Some(exp);
+        assert_invalid(inverted.sign(&signer).await, "expires at or before its iat");
+    }
+}
+
+#[tokio::test]
+async fn verifier_still_requires_exp_of_other_artifacts() {
+    // The claims of a Trust Mark without `exp`, signed as an Entity Statement.
+    let jwt = sign_federation_jwt(&trust_mark(), JwtArtifactType::EntityStatement, &signer("tmi-key"))
+        .await
+        .unwrap();
+    let result = JwtProcessor::new().verify_jwt_with_jwks::<TrustMark>(
+        &jwt,
+        &public_jwks("tmi-key"),
+        JwtArtifactType::EntityStatement,
+    );
+    assert!(
+        matches!(&result, Err(FederationError::Jwt(err)) if matches!(err.kind(), jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(claim) if claim == "exp")),
+        "{result:?}"
+    );
 }
