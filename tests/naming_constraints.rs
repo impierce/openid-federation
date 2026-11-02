@@ -1,10 +1,12 @@
 //! Naming constraints as a type (OpenID Federation 1.0, Section 6.2.2): the examples of the
 //! section, an excluded name winning over a permitted one, and names that are not fully qualified
-//! domain names refused before a Subordinate Statement is built.
+//! domain names refused before a Subordinate Statement is built or signed.
 
 use chrono::Duration;
-use openid_federation::{Constraints, EntityId, Jwk, JwkSet, NamingConstraints, SubordinateStatement};
+use jsonwebtoken::Algorithm;
+use openid_federation::{Constraints, EntityId, InMemorySigner, Jwk, JwkSet, NamingConstraints, SubordinateStatement};
 
+const EC_P256_DER: &[u8] = include_bytes!("data/signer/ec-p256.pkcs8.der");
 const EC_P256_JWK: &str = include_str!("data/signer/ec-p256.public.jwk.json");
 
 fn entity(id: &str) -> EntityId {
@@ -116,6 +118,17 @@ fn naming_constraints_need_a_non_empty_list() {
         error.to_string().contains("permitted must not be the empty array"),
         "{error}"
     );
+
+    let error = NamingConstraints {
+        permitted: None,
+        excluded: Some(Vec::new()),
+    }
+    .validate()
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("excluded must not be the empty array"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -164,4 +177,34 @@ fn subordinate_statement_with_malformed_naming_constraints_is_not_built() {
         })
         .build()
         .unwrap();
+}
+
+/// A statement assembled without the builder is checked when it is signed, before the signer is
+/// called.
+#[tokio::test]
+async fn subordinate_statement_with_malformed_naming_constraints_is_not_signed() {
+    let mut key: Jwk = serde_json::from_str(EC_P256_JWK).unwrap();
+    key.kid = Some("op-key".to_string());
+    let mut jwks = JwkSet::new();
+    jwks.add_key(key);
+    let now = chrono::Utc::now().timestamp();
+    let statement = SubordinateStatement::new(
+        entity("https://ta.example.org"),
+        entity("https://op.example.org"),
+        now + 3600,
+        now,
+        jwks,
+    )
+    .with_constraints(Constraints {
+        naming_constraints: Some(permitted(&["https://example.com"])),
+        ..Default::default()
+    });
+    let signer = InMemorySigner::from_der(Algorithm::ES256, "ta-key", EC_P256_DER).unwrap();
+
+    let error = statement.sign(&signer).await.unwrap_err();
+
+    assert!(
+        error.to_string().contains("not a fully qualified domain name"),
+        "{error}"
+    );
 }
