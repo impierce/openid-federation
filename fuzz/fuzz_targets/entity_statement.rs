@@ -50,9 +50,16 @@ fuzz_target!(|data: &[u8]| {
         ] {
             let _ = metadata.has_entity_type(&entity_type);
         }
-        // Every extension member is an additional Entity Type the metadata has.
-        for identifier in metadata.extensions.keys() {
-            assert!(metadata.has_entity_type(&EntityType::Other(identifier.clone())));
+        // An extension member is an additional Entity Type exactly when its value is a JSON object
+        // (Section 5), and `entity_types` lists only Entity Types the metadata has.
+        for (identifier, metadata_of_type) in &metadata.extensions {
+            assert_eq!(
+                metadata.has_entity_type(&EntityType::Other(identifier.clone())),
+                metadata_of_type.is_object()
+            );
+        }
+        for entity_type in metadata.entity_types() {
+            assert!(metadata.has_entity_type(&entity_type));
         }
         roundtrip(&metadata);
     }
