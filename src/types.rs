@@ -277,34 +277,299 @@ pub struct TrustMarkOwners {
     pub by_type: HashMap<String, TrustMarkOwner>,
 }
 
-/// Policy Operators as defined in the OpenID Federation specification.
-/// It's a struct, not an enum, to enable multiple operators to be used in combination as defined in the spec.
+/// A metadata policy, the `metadata_policy` claim of a Subordinate Statement: per Entity Type
+/// Identifier, the metadata parameter policies of that Entity Type, per metadata parameter name.
 ///
-/// Reference: OpenID Federation 1.0 - Section 7 Metadata Policy
-/// <https://openid.net/specs/openid-federation-1_0.html#name-metadata-policy>
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Reference: OpenID Federation 1.0 - Section 6.1.2 Structure
+/// <https://openid.net/specs/openid-federation-1_0.html#section-6.1.2>
+pub type MetadataPolicy = HashMap<String, HashMap<String, PolicyOperators>>;
+
+/// The standard metadata policy operators, in their order of application (Section 6.1.3.1).
+pub(crate) const STANDARD_POLICY_OPERATORS: &[&str] = &[
+    "value",
+    "add",
+    "default",
+    "one_of",
+    "subset_of",
+    "superset_of",
+    "essential",
+];
+
+/// A metadata parameter policy: the operators that check or modify one metadata parameter.
+///
+/// The seven standard operators are fields. `value: Some(Value::Null)` is the operator `value`
+/// set to `null`, which removes the parameter; `None` is the operator being absent. Any other
+/// operator, which a federation may define (Section 6.1.3.2), is kept in
+/// [`additional`](Self::additional) under its name, so it round-trips and a verifier can tell
+/// that a critical one was present.
+///
+/// [`PolicyOperators::validate`] checks the operator values and combinations the specification
+/// allows.
+///
+/// Reference: OpenID Federation 1.0 - Section 6.1.3 Operators
+/// <https://openid.net/specs/openid-federation-1_0.html#section-6.1.3>
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PolicyOperators {
-    /// Essential policy operators
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub essential: Option<bool>,
-    /// Default value
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<serde_json::Value>,
-    /// One of values
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub one_of: Option<Vec<serde_json::Value>>,
-    /// Subset of values
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subset_of: Option<Vec<serde_json::Value>>,
-    /// Superset of values
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub superset_of: Option<Vec<serde_json::Value>>,
-    /// Add values
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub add: Option<serde_json::Value>,
-    /// Value operation
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// `value`: the parameter is assigned this value, or removed when it is `null`
+    /// (Section 6.1.3.1.1).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub value: Option<serde_json::Value>,
+    /// `add`: these values are added to the parameter (Section 6.1.3.1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub add: Option<serde_json::Value>,
+    /// `default`: the parameter is set to this value when it is absent (Section 6.1.3.1.3).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub default: Option<serde_json::Value>,
+    /// `one_of`: the parameter must be one of these values (Section 6.1.3.1.4).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub one_of: Option<Vec<serde_json::Value>>,
+    /// `subset_of`: the parameter is narrowed to the values it shares with these
+    /// (Section 6.1.3.1.5).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub subset_of: Option<Vec<serde_json::Value>>,
+    /// `superset_of`: the parameter must contain these values (Section 6.1.3.1.6).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub superset_of: Option<Vec<serde_json::Value>>,
+    /// `essential`: when `true`, the parameter must be present (Section 6.1.3.1.7).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub essential: Option<bool>,
+    /// Operators other than the standard ones, by name (Section 6.1.3.2).
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
+}
+
+/// Deserializes a member that is present, keeping a JSON `null` as `Some(Value::Null)` for
+/// `serde_json::Value` and refusing it for the other types, instead of reading it as absent.
+fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
+
+impl PolicyOperators {
+    /// Checks the operator values and combinations the specification allows, the policy
+    /// errors of Sections 6.1.3.1.1 to 6.1.3.1.7:
+    ///
+    /// - `value` is a string, number, boolean, array or `null`; `default` a string, number,
+    ///   boolean or array; `add`, `one_of`, `subset_of` and `superset_of` arrays of strings,
+    ///   numbers or objects.
+    /// - `one_of` combines only with `value`, `default` and `essential`.
+    /// - `value` is among `one_of`, its values are a subset of `subset_of` and a superset of
+    ///   `superset_of` and of `add`; a `null` `value` has no values.
+    /// - `value: null` combines neither with `default` nor with `essential: true`.
+    /// - `add` is a subset of `subset_of`, and `subset_of` a superset of `superset_of`.
+    /// - An additional operator does not take the name of a standard one.
+    ///
+    /// Values compare as JSON values. Additional operators are not checked: their rules are the
+    /// federation's.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidMetadata`] naming the rule that fails.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.1.3.1 Standard Operators
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-6.1.3.1>
+    pub fn validate(&self) -> FederationResult<()> {
+        if let Some(name) = self
+            .additional
+            .keys()
+            .find(|name| STANDARD_POLICY_OPERATORS.contains(&name.as_str()))
+        {
+            return Err(policy_error(format!(
+                "the additional operator {name:?} has the name of a standard operator"
+            )));
+        }
+
+        if let Some(value) = &self.value {
+            if value.is_object() {
+                return Err(policy_error(
+                    "value must be a string, number, boolean, array or null".to_string(),
+                ));
+            }
+        }
+        if let Some(default) = &self.default {
+            if default.is_object() || default.is_null() {
+                return Err(policy_error(
+                    "default must be a string, number, boolean or array".to_string(),
+                ));
+            }
+        }
+        let add = match &self.add {
+            Some(serde_json::Value::Array(add)) => Some(add),
+            Some(_) => return Err(policy_error("add must be an array".to_string())),
+            None => None,
+        };
+        for (name, values) in [
+            ("add", add),
+            ("one_of", self.one_of.as_ref()),
+            ("subset_of", self.subset_of.as_ref()),
+            ("superset_of", self.superset_of.as_ref()),
+        ] {
+            if let Some(element) = values
+                .into_iter()
+                .flatten()
+                .find(|element| !(element.is_string() || element.is_number() || element.is_object()))
+            {
+                return Err(policy_error(format!(
+                    "{name} must be an array of strings, numbers or objects, but contains {element}"
+                )));
+            }
+        }
+
+        if self.one_of.is_some() {
+            for (name, present) in [
+                ("add", self.add.is_some()),
+                ("subset_of", self.subset_of.is_some()),
+                ("superset_of", self.superset_of.is_some()),
+            ] {
+                if present {
+                    return Err(policy_error(format!("one_of must not be combined with {name}")));
+                }
+            }
+        }
+
+        if let Some(value) = &self.value {
+            let values = values_of(value);
+            if value.is_null() {
+                if self.default.is_some() {
+                    return Err(policy_error("value null must not be combined with default".to_string()));
+                }
+                if self.essential == Some(true) {
+                    return Err(policy_error(
+                        "value null must not be combined with essential true".to_string(),
+                    ));
+                }
+            }
+            if let Some(one_of) = &self.one_of {
+                if !one_of.contains(value) {
+                    return Err(policy_error(format!("value {value} must be among the one_of values")));
+                }
+            }
+            if let Some(subset_of) = &self.subset_of {
+                if !is_subset(&values, subset_of) {
+                    return Err(policy_error(
+                        "the values of value must be a subset of the values of subset_of".to_string(),
+                    ));
+                }
+            }
+            if let Some(superset_of) = &self.superset_of {
+                if !is_subset(superset_of, &values) {
+                    return Err(policy_error(
+                        "the values of value must be a superset of the values of superset_of".to_string(),
+                    ));
+                }
+            }
+            if let Some(add) = add {
+                if !is_subset(add, &values) {
+                    return Err(policy_error(
+                        "the values of add must be a subset of the values of value".to_string(),
+                    ));
+                }
+            }
+        }
+
+        if let (Some(add), Some(subset_of)) = (add, &self.subset_of) {
+            if !is_subset(add, subset_of) {
+                return Err(policy_error(
+                    "the values of add must be a subset of the values of subset_of".to_string(),
+                ));
+            }
+        }
+        if let (Some(subset_of), Some(superset_of)) = (&self.subset_of, &self.superset_of) {
+            if !is_subset(superset_of, subset_of) {
+                return Err(policy_error(
+                    "the values of subset_of must be a superset of the values of superset_of".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether no operator, standard or additional, is present.
+    fn is_empty(&self) -> bool {
+        self.value.is_none()
+            && self.add.is_none()
+            && self.default.is_none()
+            && self.one_of.is_none()
+            && self.subset_of.is_none()
+            && self.superset_of.is_none()
+            && self.essential.is_none()
+            && self.additional.is_empty()
+    }
+}
+
+/// Checks a whole metadata policy: every level has at least one member (Section 6.1.2), every
+/// metadata parameter policy passes [`PolicyOperators::validate`], and no operator named in
+/// `critical_operators` is used.
+///
+/// `critical_operators` are the operators named in `metadata_policy_crit` that the caller does
+/// not understand. A verifier resolving a Trust Chain passes the critical operators it collected
+/// from the chain minus those it implements, since a policy that uses a critical operator it
+/// cannot process makes the Trust Chain invalid (Sections 6.1.3.2 and 6.1.4.1). This crate
+/// implements no additional operator. A producer passes `&[]`: it publishes its own operators.
+///
+/// # Errors
+///
+/// [`FederationError::InvalidMetadata`] naming the Entity Type, the metadata parameter and the
+/// rule that fails.
+///
+/// Reference: OpenID Federation 1.0 - Section 6.1.4.1 Resolution
+/// <https://openid.net/specs/openid-federation-1_0.html#section-6.1.4.1>
+pub fn validate_metadata_policy(policy: &MetadataPolicy, critical_operators: &[String]) -> FederationResult<()> {
+    if policy.is_empty() {
+        return Err(policy_error(
+            "a metadata policy must contain a policy for at least one Entity Type".to_string(),
+        ));
+    }
+    for (entity_type, parameters) in policy {
+        if parameters.is_empty() {
+            return Err(policy_error(format!(
+                "the metadata policy for {entity_type} must contain at least one metadata parameter policy"
+            )));
+        }
+        for (parameter, operators) in parameters {
+            let in_context = |error: FederationError| match error {
+                FederationError::InvalidMetadata(message) => {
+                    FederationError::InvalidMetadata(format!("{entity_type}.{parameter}: {message}"))
+                }
+                other => other,
+            };
+            if operators.is_empty() {
+                return Err(in_context(policy_error(
+                    "a metadata parameter policy must contain at least one operator".to_string(),
+                )));
+            }
+            operators.validate().map_err(in_context)?;
+            if let Some(operator) = operators
+                .additional
+                .keys()
+                .find(|name| critical_operators.contains(name))
+            {
+                return Err(in_context(policy_error(format!(
+                    "the critical operator {operator:?} is not understood"
+                ))));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn policy_error(message: String) -> FederationError {
+    FederationError::InvalidMetadata(format!("metadata policy error: {message}"))
+}
+
+/// The values of a `value` operator: the elements of an array, none for `null`, or the value
+/// itself.
+fn values_of(value: &serde_json::Value) -> Vec<serde_json::Value> {
+    match value {
+        serde_json::Value::Array(values) => values.clone(),
+        serde_json::Value::Null => Vec::new(),
+        single => vec![single.clone()],
+    }
+}
+
+/// Whether every element of `subset` is in `superset`.
+fn is_subset(subset: &[serde_json::Value], superset: &[serde_json::Value]) -> bool {
+    subset.iter().all(|element| superset.contains(element))
 }
 
 /// Constraints a Superior places on the Subordinates below it, carried in the `constraints` claim
@@ -312,14 +577,22 @@ pub struct PolicyOperators {
 ///
 /// Reference: OpenID Federation 1.0 - Section 6.2 Constraints
 /// <https://openid.net/specs/openid-federation-1_0.html#chain_constraints>
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Constraints {
-    /// Maximum path length for trust chains
+    /// The most Intermediate Entities a Trust Chain may have between this statement and the
+    /// Trust Chain subject. It MUST be 0 or more, which `u32` guarantees.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2.1 Max Path Length Constraint
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-6.2.1>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_path_length: Option<u32>,
-    /// Naming constraints
+    /// The hosts and domains the Entity Identifiers of Subordinates in a Trust Chain must, or must
+    /// not, be in.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2.2 Naming Constraints
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-6.2.2>
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub naming_constraints: Option<HashMap<String, serde_json::Value>>,
+    pub naming_constraints: Option<NamingConstraints>,
     /// The Entity Types acceptable for Subordinate Entities in a Trust Chain. Absent, any Entity
     /// Type is allowed; `federation_entity` is always allowed and never listed.
     ///
@@ -327,6 +600,143 @@ pub struct Constraints {
     /// <https://openid.net/specs/openid-federation-1_0.html#entity_type_constraints>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_entity_types: Option<Vec<EntityType>>,
+}
+
+impl Constraints {
+    /// Checks the constraints a Superior may publish: the naming constraints pass
+    /// [`NamingConstraints::validate`].
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`NamingConstraints::validate`].
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2 Constraints
+    /// <https://openid.net/specs/openid-federation-1_0.html#chain_constraints>
+    pub fn validate(&self) -> FederationResult<()> {
+        if let Some(naming_constraints) = &self.naming_constraints {
+            naming_constraints.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// The hosts and domains the Entity Identifiers of Subordinates in a Trust Chain must be in
+/// (`permitted`) or must not be in (`excluded`), as domain name constraints of RFC 5280,
+/// Section 4.2.1.10, matched against the host of the Entity Identifier.
+///
+/// - `host.example.com` names that host only.
+/// - `.example.com` names every host below `example.com`, such as `host.example.com` and
+///   `my.host.example.com`, but not `example.com` itself.
+/// - A host that matches an `excluded` name is not permitted, whatever `permitted` says.
+/// - When `permitted` is present, a host must match one of its names.
+///
+/// Names compare without regard to case, as DNS names do. Write internationalized domain names
+/// as A-labels (`xn--…`), the form the host of a parsed Entity Identifier takes.
+///
+/// A name without a leading period names one host. RFC 5280 lets such a name also cover the
+/// hosts below it; OpenID Federation 1.0 does not, and the specification decides here.
+///
+/// Reference: OpenID Federation 1.0 - Section 6.2.2 Naming Constraints
+/// <https://openid.net/specs/openid-federation-1_0.html#section-6.2.2>
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NamingConstraints {
+    /// The hosts and domains Subordinates must be in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permitted: Option<Vec<String>>,
+    /// The hosts and domains Subordinates must not be in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excluded: Option<Vec<String>>,
+}
+
+impl NamingConstraints {
+    /// Checks that the naming constraints can be published: `permitted` or `excluded` is present,
+    /// neither is the empty array, and every name is a fully qualified domain name, optionally
+    /// with a leading period, without a scheme, port, path or trailing period.
+    ///
+    /// A name is a sequence of labels separated by periods; each label has 1 to 63 ASCII letters,
+    /// digits and hyphens, and neither starts nor ends with a hyphen; the whole name has at most
+    /// 253 characters. RFC 5280 requires at least one of the two lists, each with at least one
+    /// name.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidSubordinateStatement`] naming the list and the name that fails.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2.2 Naming Constraints
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-6.2.2> and RFC 5280,
+    /// Section 4.2.1.10 (<https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.10>)
+    pub fn validate(&self) -> FederationResult<()> {
+        if self.permitted.is_none() && self.excluded.is_none() {
+            return Err(FederationError::InvalidSubordinateStatement(
+                "naming_constraints must contain permitted, excluded or both".to_string(),
+            ));
+        }
+        for (list, names) in [("permitted", &self.permitted), ("excluded", &self.excluded)] {
+            let Some(names) = names else { continue };
+            if names.is_empty() {
+                return Err(FederationError::InvalidSubordinateStatement(format!(
+                    "naming_constraints {list} must not be the empty array"
+                )));
+            }
+            if let Some(name) = names.iter().find(|name| !is_domain_name_constraint(name)) {
+                return Err(FederationError::InvalidSubordinateStatement(format!(
+                    "naming_constraints {list} entry {name:?} is not a fully qualified domain name, \
+                     such as \"host.example.com\" or \".example.com\""
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the host of `entity_id` satisfies these naming constraints: it matches no
+    /// `excluded` name, and, when `permitted` is present, it matches a `permitted` name. An
+    /// Entity Identifier without a host is never permitted.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2.2 Naming Constraints
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-6.2.2>
+    pub fn permits(&self, entity_id: &EntityId) -> bool {
+        let Some(host) = entity_id.as_url().host_str() else {
+            return false;
+        };
+        let matches_any = |names: &Option<Vec<String>>| {
+            names
+                .iter()
+                .flatten()
+                .any(|name| domain_name_constraint_matches(name, host))
+        };
+        if matches_any(&self.excluded) {
+            return false;
+        }
+        self.permitted.is_none() || matches_any(&self.permitted)
+    }
+}
+
+/// Whether `name` is a domain name constraint of RFC 5280, Section 4.2.1.10: a fully qualified
+/// domain name, optionally with a leading period.
+fn is_domain_name_constraint(name: &str) -> bool {
+    let domain = name.strip_prefix('.').unwrap_or(name);
+    !domain.is_empty()
+        && domain.len() <= 253
+        && domain.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
+/// Whether `host` satisfies the domain name constraint `name`: `.example.com` is satisfied by
+/// any host below `example.com`, `host.example.com` by that host only (Section 6.2.2).
+fn domain_name_constraint_matches(name: &str, host: &str) -> bool {
+    if name.starts_with('.') {
+        host.len() > name.len()
+            && host
+                .get(host.len() - name.len()..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(name))
+    } else {
+        host.eq_ignore_ascii_case(name)
+    }
 }
 
 #[cfg(test)]

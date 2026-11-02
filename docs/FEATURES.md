@@ -39,6 +39,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | `openid_provider`, `openid_relying_party`, `oauth_authorization_server` as typed structs             |   ✅   | [Metadata](https://openid.net/specs/openid-federation-1_0.html#metadata)                                           |       |
 | `oauth_resource` and `oauth_client` as typed structs (untyped JSON objects today)                     |   📋   | [Metadata](https://openid.net/specs/openid-federation-1_0.html#metadata)                                           |       |
 | Metadata policy operators as a data type                                                             |   ✅   | [Metadata Policy](https://openid.net/specs/openid-federation-1_0.html#metadata_policy)                             |       |
+| Validating a metadata policy (`validate_metadata_policy`, `PolicyOperators::validate`): operator values and combinations, additional operators kept, critical ones not understood refused |   ✅   | [Operators](https://openid.net/specs/openid-federation-1_0.html#section-6.1.3)                                         | #41   |
 | Applying a metadata policy to metadata, and merging policies along a chain                           |   📋   | [Enforcement](https://openid.net/specs/openid-federation-1_0.html#metadata_policy_enforcement)                             |       |
 | Resolving the leaf's metadata through the trust chain (`TrustChain::metadata`)                       |   📋   | [Resolving the Trust Chain and Metadata](https://openid.net/specs/openid-federation-1_0.html#resolving_trust)     |       |
 
@@ -47,6 +48,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | Feature                                                                                              | Status | Specification                                                                                                            | Issue |
 | ---------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------ | ----- |
 | `Constraints` as a data type (`max_path_length`, `naming_constraints`, `allowed_entity_types`)        |   ✅   | [Constraints](https://openid.net/specs/openid-federation-1_0.html#chain_constraints)                                     |       |
+| Naming constraints as a type (`NamingConstraints`): domain names checked before issuing, `permits` matches an Entity Identifier's host |   ✅   | [Naming Constraints](https://openid.net/specs/openid-federation-1_0.html#section-6.2.2)                                   | #40   |
 | Enforcing constraints during trust chain validation                                                  |   📋   | [Constraints](https://openid.net/specs/openid-federation-1_0.html#chain_constraints)                                     |       |
 
 ## Trust Marks
