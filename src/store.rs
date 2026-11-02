@@ -311,16 +311,19 @@ pub trait TrustMarkStore: Send + Sync {
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4>)
     async fn trust_mark(&self, jwt: &str) -> Result<Option<IssuedTrustMark>, StoreError>;
 
-    /// Every issued Trust Mark of `trust_mark_type`, and only those issued to `sub` when it is
-    /// given, revoked and expired ones included, in no particular order. An implementation on a
-    /// database answers it from an index on the type and the subject.
+    /// Every issued Trust Mark, only those of `trust_mark_type` when it is given and only those
+    /// issued to `sub` when it is given, revoked and expired ones included, in no particular
+    /// order. An implementation on a database answers it from an index on the type and the
+    /// subject.
     ///
-    /// Reference: OpenID Federation 1.0 - Section 8.5 Trust Marked Entities Listing
-    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.5>) and Section 8.6 Trust
-    /// Mark Endpoint (<https://openid.net/specs/openid-federation-1_0.html#section-8.6>)
+    /// Reference: OpenID Federation 1.0 - Section 8.2.1 Subordinate Listing Request
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.2.1>), Section 8.5 Trust
+    /// Marked Entities Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.5>)
+    /// and Section 8.6 Trust Mark Endpoint
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.6>)
     async fn trust_marks(
         &self,
-        trust_mark_type: &str,
+        trust_mark_type: Option<&str>,
         sub: Option<&EntityId>,
     ) -> Result<Vec<IssuedTrustMark>, StoreError>;
 }
@@ -385,7 +388,7 @@ impl TrustMarkStore for InMemoryTrustMarkStore {
 
     async fn trust_marks(
         &self,
-        trust_mark_type: &str,
+        trust_mark_type: Option<&str>,
         sub: Option<&EntityId>,
     ) -> Result<Vec<IssuedTrustMark>, StoreError> {
         Ok(self
@@ -394,7 +397,7 @@ impl TrustMarkStore for InMemoryTrustMarkStore {
             .unwrap_or_else(PoisonError::into_inner)
             .values()
             .filter(|trust_mark| {
-                trust_mark.claims.trust_mark_type == trust_mark_type
+                trust_mark_type.is_none_or(|trust_mark_type| trust_mark.claims.trust_mark_type == trust_mark_type)
                     && sub.is_none_or(|sub| trust_mark.claims.sub == *sub)
             })
             .cloned()

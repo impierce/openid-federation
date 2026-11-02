@@ -108,7 +108,7 @@ impl TrustMarkStatusEndpoint {
                 let issued_to_subject = claims.iss == self.issuer
                     && self
                         .trust_marks
-                        .trust_marks(&claims.trust_mark_type, Some(&claims.sub))
+                        .trust_marks(Some(&claims.trust_mark_type), Some(&claims.sub))
                         .await?
                         .iter()
                         .any(|issued| issued.claims.sub == claims.sub);
