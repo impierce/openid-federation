@@ -4,10 +4,15 @@
 //!
 //! The crate depends on no web framework (ADR 0005). A handler returns an [`EndpointResponse`],
 //! and the application turns its status, content type and body into the response of its own
-//! framework.
+//! framework. [`EntityConfigurationEndpoint`] serves an entity's Entity Configuration
+//! (Section 9).
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
+
+mod entity_configuration;
+
+pub use entity_configuration::*;
 
 /// The content type of an [`ErrorResponse`] and of the other JSON responses of the federation
 /// endpoints.
@@ -15,6 +20,14 @@ use std::fmt;
 /// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
 pub const JSON_CONTENT_TYPE: &str = "application/json";
+
+/// The content type of a successful response that carries an Entity Statement: an Entity
+/// Configuration or a Subordinate Statement.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.1.2 Fetch Subordinate Statement Response
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1.2>) and Section 9.2
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-9.2>)
+pub const ENTITY_STATEMENT_CONTENT_TYPE: &str = "application/entity-statement+jwt";
 
 /// What a federation endpoint handler answers: the HTTP status, the content type and the body.
 ///
