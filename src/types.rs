@@ -577,14 +577,22 @@ fn is_subset(subset: &[serde_json::Value], superset: &[serde_json::Value]) -> bo
 ///
 /// Reference: OpenID Federation 1.0 - Section 6.2 Constraints
 /// <https://openid.net/specs/openid-federation-1_0.html#chain_constraints>
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Constraints {
-    /// Maximum path length for trust chains
+    /// The most Intermediate Entities a Trust Chain may have between this statement and the
+    /// Trust Chain subject. It MUST be 0 or more, which `u32` guarantees.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2.1 Max Path Length Constraint
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-6.2.1>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_path_length: Option<u32>,
-    /// Naming constraints
+    /// The hosts and domains the Entity Identifiers of Subordinates in a Trust Chain must, or must
+    /// not, be in.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2.2 Naming Constraints
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-6.2.2>
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub naming_constraints: Option<HashMap<String, serde_json::Value>>,
+    pub naming_constraints: Option<NamingConstraints>,
     /// The Entity Types acceptable for Subordinate Entities in a Trust Chain. Absent, any Entity
     /// Type is allowed; `federation_entity` is always allowed and never listed.
     ///
@@ -592,6 +600,143 @@ pub struct Constraints {
     /// <https://openid.net/specs/openid-federation-1_0.html#entity_type_constraints>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_entity_types: Option<Vec<EntityType>>,
+}
+
+impl Constraints {
+    /// Checks the constraints a Superior may publish: the naming constraints pass
+    /// [`NamingConstraints::validate`].
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`NamingConstraints::validate`].
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2 Constraints
+    /// <https://openid.net/specs/openid-federation-1_0.html#chain_constraints>
+    pub fn validate(&self) -> FederationResult<()> {
+        if let Some(naming_constraints) = &self.naming_constraints {
+            naming_constraints.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// The hosts and domains the Entity Identifiers of Subordinates in a Trust Chain must be in
+/// (`permitted`) or must not be in (`excluded`), as domain name constraints of RFC 5280,
+/// Section 4.2.1.10, matched against the host of the Entity Identifier.
+///
+/// - `host.example.com` names that host only.
+/// - `.example.com` names every host below `example.com`, such as `host.example.com` and
+///   `my.host.example.com`, but not `example.com` itself.
+/// - A host that matches an `excluded` name is not permitted, whatever `permitted` says.
+/// - When `permitted` is present, a host must match one of its names.
+///
+/// Names compare without regard to case, as DNS names do. Write internationalized domain names
+/// as A-labels (`xn--…`), the form the host of a parsed Entity Identifier takes.
+///
+/// A name without a leading period names one host. RFC 5280 lets such a name also cover the
+/// hosts below it; OpenID Federation 1.0 does not, and the specification decides here.
+///
+/// Reference: OpenID Federation 1.0 - Section 6.2.2 Naming Constraints
+/// <https://openid.net/specs/openid-federation-1_0.html#section-6.2.2>
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NamingConstraints {
+    /// The hosts and domains Subordinates must be in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permitted: Option<Vec<String>>,
+    /// The hosts and domains Subordinates must not be in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excluded: Option<Vec<String>>,
+}
+
+impl NamingConstraints {
+    /// Checks that the naming constraints can be published: `permitted` or `excluded` is present,
+    /// neither is the empty array, and every name is a fully qualified domain name, optionally
+    /// with a leading period, without a scheme, port, path or trailing period.
+    ///
+    /// A name is a sequence of labels separated by periods; each label has 1 to 63 ASCII letters,
+    /// digits and hyphens, and neither starts nor ends with a hyphen; the whole name has at most
+    /// 253 characters. RFC 5280 requires at least one of the two lists, each with at least one
+    /// name.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidSubordinateStatement`] naming the list and the name that fails.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2.2 Naming Constraints
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-6.2.2> and RFC 5280,
+    /// Section 4.2.1.10 (<https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.10>)
+    pub fn validate(&self) -> FederationResult<()> {
+        if self.permitted.is_none() && self.excluded.is_none() {
+            return Err(FederationError::InvalidSubordinateStatement(
+                "naming_constraints must contain permitted, excluded or both".to_string(),
+            ));
+        }
+        for (list, names) in [("permitted", &self.permitted), ("excluded", &self.excluded)] {
+            let Some(names) = names else { continue };
+            if names.is_empty() {
+                return Err(FederationError::InvalidSubordinateStatement(format!(
+                    "naming_constraints {list} must not be the empty array"
+                )));
+            }
+            if let Some(name) = names.iter().find(|name| !is_domain_name_constraint(name)) {
+                return Err(FederationError::InvalidSubordinateStatement(format!(
+                    "naming_constraints {list} entry {name:?} is not a fully qualified domain name, \
+                     such as \"host.example.com\" or \".example.com\""
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the host of `entity_id` satisfies these naming constraints: it matches no
+    /// `excluded` name, and, when `permitted` is present, it matches a `permitted` name. An
+    /// Entity Identifier without a host is never permitted.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.2.2 Naming Constraints
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-6.2.2>
+    pub fn permits(&self, entity_id: &EntityId) -> bool {
+        let Some(host) = entity_id.as_url().host_str() else {
+            return false;
+        };
+        let matches_any = |names: &Option<Vec<String>>| {
+            names
+                .iter()
+                .flatten()
+                .any(|name| domain_name_constraint_matches(name, host))
+        };
+        if matches_any(&self.excluded) {
+            return false;
+        }
+        self.permitted.is_none() || matches_any(&self.permitted)
+    }
+}
+
+/// Whether `name` is a domain name constraint of RFC 5280, Section 4.2.1.10: a fully qualified
+/// domain name, optionally with a leading period.
+fn is_domain_name_constraint(name: &str) -> bool {
+    let domain = name.strip_prefix('.').unwrap_or(name);
+    !domain.is_empty()
+        && domain.len() <= 253
+        && domain.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
+/// Whether `host` satisfies the domain name constraint `name`: `.example.com` is satisfied by
+/// any host below `example.com`, `host.example.com` by that host only (Section 6.2.2).
+fn domain_name_constraint_matches(name: &str, host: &str) -> bool {
+    if name.starts_with('.') {
+        host.len() > name.len()
+            && host
+                .get(host.len() - name.len()..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(name))
+    } else {
+        host.eq_ignore_ascii_case(name)
+    }
 }
 
 #[cfg(test)]

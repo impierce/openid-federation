@@ -27,7 +27,7 @@ openid-federation/
 │   ├── jwt.rs           # JwtArtifactType (`typ` headers), JwtClaims, NumericDate, JwtProcessor, extract_claims_unverified
 │   ├── jwk.rs           # Jwk, JwkSet and their conversion to jsonwebtoken keys
 │   ├── metadata.rs      # EntityMetadata and the metadata type of each entity type
-│   ├── types.rs         # EntityId, EntityType, TrustMarkEntry, TrustMark, TrustMarkIssuers, TrustMarkOwners, MetadataPolicy, PolicyOperators (validate_metadata_policy), Constraints
+│   ├── types.rs         # EntityId, EntityType, TrustMarkEntry, TrustMark, TrustMarkIssuers, TrustMarkOwners, MetadataPolicy, PolicyOperators (validate_metadata_policy), Constraints, NamingConstraints
 │   ├── utils.rs         # HttpClient, HttpResponse, FederationClient (fetch, resolve, discover, list), TrustChainDiscovery, UrlValidator
 │   ├── endpoint.rs      # EndpointRequest, EndpointResponse, ErrorCode, ErrorResponse (Section 8.9)
 │   ├── endpoint/
