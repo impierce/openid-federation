@@ -74,6 +74,12 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | Injectable `HttpClient`; `reqwest` with `rustls` as the default                                       |   ✅   |                                                                                                                          |       |
 | Error responses: `ErrorCode`, `ErrorResponse` served as `EndpointResponse`, parsed into `FederationError::Endpoint` |   ✅   | [Error Responses](https://openid.net/specs/openid-federation-1_0.html#section-8.9)                                       | #36   |
 
+## Issuing side: Trust Anchors and Intermediate Entities
+
+| Feature                                                                                              | Status | Specification                                                                                                            | Issue |
+| ---------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------ | ----- |
+| Fetch endpoint handler (`FetchEndpoint`) over a `SubordinateStore`, with `InMemorySubordinateStore`; `EndpointRequest` |   ✅   | [Fetching a Subordinate Statement](https://openid.net/specs/openid-federation-1_0.html#section-8.1)                      | #38   |
+
 ## JOSE
 
 | Feature                                                                                              | Status | Specification                                                                                                            | Issue |

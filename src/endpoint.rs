@@ -2,12 +2,17 @@
 //! response of OpenID Federation 1.0,
 //! [Section 8.9](https://openid.net/specs/openid-federation-1_0.html#section-8.9).
 //!
-//! The crate depends on no web framework (ADR 0005). A handler returns an [`EndpointResponse`],
-//! and the application turns its status, content type and body into the response of its own
-//! framework.
+//! The crate depends on no web framework (ADR 0005). The application parses each request into an
+//! [`EndpointRequest`], a handler answers it with an [`EndpointResponse`], and the application
+//! turns its status, content type and body into the response of its own framework.
+//! [`FetchEndpoint`] serves Subordinate Statements (Section 8.1).
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
+
+mod fetch;
+
+pub use fetch::*;
 
 /// The content type of an [`ErrorResponse`] and of the other JSON responses of the federation
 /// endpoints.
@@ -15,6 +20,14 @@ use std::fmt;
 /// Reference: OpenID Federation 1.0 - Section 8.9 Error Responses
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.9>)
 pub const JSON_CONTENT_TYPE: &str = "application/json";
+
+/// The content type of a successful response that carries an Entity Statement: an Entity
+/// Configuration or a Subordinate Statement.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.1.2 Fetch Subordinate Statement Response
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1.2>) and Section 9.2
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-9.2>)
+pub const ENTITY_STATEMENT_CONTENT_TYPE: &str = "application/entity-statement+jwt";
 
 /// What a federation endpoint handler answers: the HTTP status, the content type and the body.
 ///
@@ -52,6 +65,104 @@ impl From<ErrorResponse> for EndpointResponse {
     fn from(error: ErrorResponse) -> Self {
         error.to_endpoint_response()
     }
+}
+
+/// The HTTP method of a request to a federation endpoint.
+///
+/// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum HttpMethod {
+    /// `GET`, with the parameters in the query.
+    Get,
+    /// `POST`, with the parameters in an `application/x-www-form-urlencoded` body, as requests
+    /// that use client authentication are sent (Section 8.8).
+    Post,
+}
+
+/// A request to a federation endpoint, as the application parsed it: the HTTP method and the
+/// query or form parameters, in order, repeated parameters kept.
+///
+/// Handlers ignore parameters they do not know (Section 8). A parameter a handler reads may
+/// appear once; a repeated one is an `invalid_request`, see [`EndpointRequest::parameter`].
+///
+/// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointRequest {
+    method: HttpMethod,
+    parameters: Vec<(String, String)>,
+}
+
+impl EndpointRequest {
+    /// A request with `method` and `parameters`, already decoded.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
+    pub fn new(method: HttpMethod, parameters: impl IntoIterator<Item = (String, String)>) -> Self {
+        Self {
+            method,
+            parameters: parameters.into_iter().collect(),
+        }
+    }
+
+    /// A `GET` request with the parameters of `query`, the `application/x-www-form-urlencoded`
+    /// query string of the request URL, with or without its leading `?`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.1.1 Fetch Subordinate Statement Request
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1.1>)
+    pub fn get(query: &str) -> Self {
+        Self::new(HttpMethod::Get, parse_form(query.strip_prefix('?').unwrap_or(query)))
+    }
+
+    /// A `POST` request with the parameters of `body`, an `application/x-www-form-urlencoded`
+    /// request body.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.8 Client Authentication at Federation
+    /// Endpoints (<https://openid.net/specs/openid-federation-1_0.html#section-8.8>)
+    pub fn post(body: &str) -> Self {
+        Self::new(HttpMethod::Post, parse_form(body))
+    }
+
+    /// The HTTP method.
+    pub fn method(&self) -> HttpMethod {
+        self.method
+    }
+
+    /// Every parameter, in order, repeated parameters kept.
+    pub fn parameters(&self) -> &[(String, String)] {
+        &self.parameters
+    }
+
+    /// The value of the parameter `name`, or `None` when the request does not have it.
+    ///
+    /// # Errors
+    ///
+    /// An `invalid_request` [`ErrorResponse`] when `name` appears more than once, since a request
+    /// parameter must not be included more than once (RFC 6749, Section 3.1).
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8 Federation Endpoints
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8>)
+    pub fn parameter(&self, name: &str) -> Result<Option<&str>, ErrorResponse> {
+        let mut values = self
+            .parameters
+            .iter()
+            .filter(|(parameter, _)| parameter == name)
+            .map(|(_, value)| value.as_str());
+        let value = values.next();
+        if values.next().is_some() {
+            return Err(ErrorResponse::new(
+                ErrorCode::InvalidRequest,
+                format!("the {name} parameter appears more than once"),
+            ));
+        }
+        Ok(value)
+    }
+}
+
+fn parse_form(form: &str) -> Vec<(String, String)> {
+    url::form_urlencoded::parse(form.as_bytes()).into_owned().collect()
 }
 
 /// An error code of a federation endpoint error response (Section 8.9).
@@ -317,6 +428,31 @@ mod tests {
 
         let response = error.to_endpoint_response_with_status(502);
         assert_eq!(response.status, 502);
+    }
+
+    #[test]
+    fn request_parameters_are_decoded_and_kept_in_order() {
+        let request = EndpointRequest::get("?sub=https%3A%2F%2Fop.example.org&x=a+b&x=c");
+        assert_eq!(request.method(), HttpMethod::Get);
+        assert_eq!(request.parameter("sub").unwrap(), Some("https://op.example.org"));
+        assert_eq!(request.parameter("missing").unwrap(), None);
+        assert_eq!(
+            request.parameters(),
+            [
+                ("sub".to_string(), "https://op.example.org".to_string()),
+                ("x".to_string(), "a b".to_string()),
+                ("x".to_string(), "c".to_string()),
+            ]
+        );
+
+        let error = request.parameter("x").unwrap_err();
+        assert_eq!(error.error, ErrorCode::InvalidRequest);
+        assert!(error.error_description.contains("more than once"), "{error}");
+
+        let request = EndpointRequest::post("sub=https%3A%2F%2Fop.example.org");
+        assert_eq!(request.method(), HttpMethod::Post);
+        assert_eq!(request.parameter("sub").unwrap(), Some("https://op.example.org"));
+        assert_eq!(EndpointRequest::get("").parameters(), []);
     }
 
     #[test]
