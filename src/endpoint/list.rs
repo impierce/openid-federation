@@ -3,6 +3,7 @@
 
 use super::{EndpointRequest, EndpointResponse, ErrorCode, ErrorResponse, JSON_CONTENT_TYPE};
 use crate::{EntityType, FederationResult, Subordinate, SubordinateStore};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -107,11 +108,15 @@ impl Filter {
             return Err(unsupported("trust_mark_type"));
         }
         let intermediate = boolean(request, "intermediate")?;
+        // A repeated value filters the same as one; each is parsed and compared once.
         let entity_types = request
             .parameters()
             .iter()
             .filter(|(name, _)| name == "entity_type")
-            .map(|(_, value)| entity_type(value))
+            .map(|(_, value)| value.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(entity_type)
             .collect();
         Ok(Self {
             entity_types,

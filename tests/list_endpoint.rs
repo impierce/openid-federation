@@ -74,6 +74,11 @@ async fn entity_type_filters_keep_subordinates_with_every_given_type() {
         ["https://both.example.org/"]
     );
     assert!(listed("entity_type=oauth_resource").await.is_empty());
+    assert_eq!(
+        listed("entity_type=openid_provider&entity_type=openid_provider&entity_type=openid_relying_party").await,
+        ["https://both.example.org/"],
+        "a repeated type filters as one"
+    );
 }
 
 #[tokio::test]
@@ -96,6 +101,10 @@ async fn intermediate_true_keeps_only_intermediate_entities() {
     assert_eq!(
         listed("intermediate=true&entity_type=openid_provider").await,
         Vec::<String>::new()
+    );
+    assert_eq!(
+        listed("intermediate=true&entity_type=federation_entity").await,
+        ["https://intermediate.example.org"]
     );
     assert_eq!(listed("intermediate=false").await.len(), 4, "only true filters");
 }
