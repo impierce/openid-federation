@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use url::Url;
 
+use crate::types::STANDARD_POLICY_OPERATORS;
 use crate::{
     extract_claims_unverified, sign_federation_jwt, Constraints, EntityId, EntityMetadata, FederationError,
     FederationResult, JwkSet, JwtArtifactType, JwtClaims, JwtProcessor, PolicyOperators, Signer, TrustMarkEntry,
@@ -248,6 +249,8 @@ impl SubordinateStatement {
     /// - No extension claim takes a name this specification or RFC 7519 defines.
     /// - `crit` is not `[]`, has no duplicates, names no claim this specification or RFC 7519
     ///   defines, and names only extension claims present in the statement (Section 13.4).
+    /// - `metadata_policy` passes [`validate_metadata_policy`](crate::validate_metadata_policy):
+    ///   allowed operator values and combinations (Sections 6.1.2 and 6.1.3.1).
     /// - `metadata_policy_crit` is not `[]`, has no duplicates and names none of the standard
     ///   policy operators (Sections 3.1.3 and 6.1.3.1).
     /// - `source_endpoint` is an `https` URL with a host and without a fragment (Sections 3.1.3
@@ -283,6 +286,10 @@ impl SubordinateStatement {
                     )));
                 }
             }
+        }
+
+        if let Some(metadata_policy) = &self.metadata_policy {
+            crate::validate_metadata_policy(metadata_policy, &[])?;
         }
 
         if let Some(operators) = &self.metadata_policy_crit {
@@ -335,18 +342,6 @@ const SPECIFIED_ENTITY_STATEMENT_CLAIMS: &[&str] = &[
     "metadata_policy_crit",
     "source_endpoint",
     "trust_anchor",
-];
-
-/// The standard metadata policy operators (Section 6.1.3.1). `metadata_policy_crit` lists only
-/// operators other than these.
-const STANDARD_POLICY_OPERATORS: &[&str] = &[
-    "value",
-    "add",
-    "default",
-    "one_of",
-    "subset_of",
-    "superset_of",
-    "essential",
 ];
 
 /// `crit` and `metadata_policy_crit` are never the empty array and never list a name twice.
@@ -496,7 +491,8 @@ impl SubordinateStatementBuilder {
 
     /// Builds the statement and checks it: [`SubordinateStatement::validate`] (among others,
     /// `iss != sub` and an `exp` in the future), `exp` after `iat`, and the producer rules for
-    /// `crit`, `metadata_policy_crit` and `source_endpoint` (Sections 3.1.3 and 13.4).
+    /// `crit`, `metadata_policy`, `metadata_policy_crit` and `source_endpoint` (Sections 3.1.3,
+    /// 6.1.3 and 13.4).
     ///
     /// # Errors
     ///
