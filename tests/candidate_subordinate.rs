@@ -154,6 +154,10 @@ async fn candidate_naming_the_superior_passes_and_becomes_a_subordinate() {
     let subordinate = report.into_subordinate().unwrap();
     assert_eq!(subordinate.entity_id, candidate);
     assert_eq!(subordinate.jwks, candidate_jwks());
+    assert_eq!(
+        subordinate.entity_types,
+        vec![EntityType::FederationEntity, EntityType::OpenIdProvider]
+    );
     assert!(subordinate.intermediate);
     assert_eq!(subordinate.metadata_policy, Some(metadata_policy()));
 
@@ -261,6 +265,7 @@ async fn candidate_outside_the_naming_constraints_is_reported() {
     );
     // The configuration itself verified.
     assert!(report.configuration.is_some());
+    assert!(report.into_subordinate().is_err());
 }
 
 #[tokio::test]
@@ -364,6 +369,9 @@ fn entity_types_follow_the_metadata_members() {
         "oauth_client": {},
         "federation_entity": {},
         "aa_custom": {},
+        // Not metadata of an Entity Type, which is a JSON object (Section 5).
+        "null_custom": null,
+        "string_custom": "x",
     }))
     .unwrap();
 
@@ -377,5 +385,7 @@ fn entity_types_follow_the_metadata_members() {
             EntityType::Other("zz_custom".to_string()),
         ]
     );
+    assert!(!metadata.has_entity_type(&EntityType::Other("null_custom".to_string())));
+    assert!(metadata.has_entity_type(&EntityType::Other("aa_custom".to_string())));
     assert!(EntityMetadata::new().entity_types().is_empty());
 }
