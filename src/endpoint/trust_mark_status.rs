@@ -23,15 +23,16 @@ use std::sync::Arc;
 /// | Request                                                       | Response                                                   |
 /// | ------------------------------------------------------------- | ---------------------------------------------------------- |
 /// | a Trust Mark in the store                                      | `200`, status `revoked`, `expired` from its `exp` on, or `active` |
-/// | a Trust Mark by this issuer whose type and subject the store holds, but not this JWT | `200`, status `invalid`: the JWT is not one the issuer signed |
+/// | a Trust Mark by this issuer whose type and subject the store holds, but not this JWT | `200`, status `invalid`: not a Trust Mark the issuer recorded |
 /// | any other Trust Mark JWT                                       | `404 not_found`                                            |
 /// | not a `POST`; `trust_mark` missing, repeated or not a `trust-mark+jwt` | `400 invalid_request`                              |
 /// | the store or the signer fails                                  | `500 server_error`                                         |
 ///
-/// The store is looked up by the exact JWT, since a Trust Mark Issuer knows the Trust Marks it
-/// issued. A JWT that claims to be by the issuer, about a subject and type it issued, but that the
-/// store does not hold, was altered or not signed by the issuer, which Section 8.4.2 calls
-/// `invalid`.
+/// The store is looked up by the exact JWT, since a Trust Mark Issuer records the Trust Marks it
+/// issues and the store is its record. A JWT that claims to be by the issuer, about a subject and
+/// type it issued, but that the store does not hold, was altered, signed by someone else, or
+/// signed without being recorded; Section 8.4.2 calls each of these `invalid`. The JWT is checked
+/// to be a `trust-mark+jwt` before the store is asked.
 ///
 /// Reference: OpenID Federation 1.0 - Section 8.4 Trust Mark Status
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4>)
@@ -91,6 +92,10 @@ impl TrustMarkStatusEndpoint {
             Err(error) => return Ok(error.to_endpoint_response()),
         };
 
+        let Ok(claims) = trust_mark_claims(jwt) else {
+            return Ok(invalid_request("the trust_mark parameter is not a Trust Mark JWT"));
+        };
+
         let now = Utc::now().timestamp();
         let status = match self.trust_marks.trust_mark(jwt).await? {
             Some(issued) if issued.jwt != jwt => {
@@ -100,13 +105,10 @@ impl TrustMarkStatusEndpoint {
             }
             Some(issued) => issued.status_at(now),
             None => {
-                let Ok(claims) = trust_mark_claims(jwt) else {
-                    return Ok(invalid_request("the trust_mark parameter is not a Trust Mark JWT"));
-                };
                 let issued_to_subject = claims.iss == self.issuer
                     && self
                         .trust_marks
-                        .trust_marks(&claims.trust_mark_type)
+                        .trust_marks(&claims.trust_mark_type, Some(&claims.sub))
                         .await?
                         .iter()
                         .any(|issued| issued.claims.sub == claims.sub);

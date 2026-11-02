@@ -140,8 +140,15 @@ async fn trust_mark_with_another_signature_is_invalid() {
         .unwrap();
     assert_ne!(forged, issued);
 
-    let response = endpoint(store).handle(&status_request(&forged)).await;
+    let response = endpoint(store.clone()).handle(&status_request(&forged)).await;
     assert_eq!(status_of(&response, &forged), TrustMarkStatus::Invalid);
+
+    // Signed by the issuer for the same subject and type, but never recorded in the store, which
+    // is the issuer's record of what it issued.
+    let unrecorded = sign_trust_mark(subject(), SIRTFI, Some(now() + 7200)).await;
+    assert_ne!(unrecorded, issued);
+    let response = endpoint(store).handle(&status_request(&unrecorded)).await;
+    assert_eq!(status_of(&response, &unrecorded), TrustMarkStatus::Invalid);
 }
 
 #[tokio::test]
@@ -211,7 +218,11 @@ impl TrustMarkStore for BrokenStore {
         }
     }
 
-    async fn trust_marks(&self, _trust_mark_type: &str) -> Result<Vec<IssuedTrustMark>, StoreError> {
+    async fn trust_marks(
+        &self,
+        _trust_mark_type: &str,
+        _sub: Option<&EntityId>,
+    ) -> Result<Vec<IssuedTrustMark>, StoreError> {
         Ok(Vec::new())
     }
 }
@@ -230,6 +241,12 @@ async fn store_failure_is_a_server_error() {
         unreachable.try_handle(&status_request(&issued)).await,
         Err(FederationError::Store(_))
     ));
+    // A malformed request is answered without asking the store.
+    assert_error(
+        &unreachable.handle(&status_request("not-a-jwt")).await,
+        ErrorCode::InvalidRequest,
+        400,
+    );
 
     let other = sign_trust_mark(entity("https://rp.example.org"), SIRTFI, None).await;
     let confused = endpoint(Arc::new(BrokenStore {
@@ -259,17 +276,39 @@ async fn issued_trust_mark_must_be_a_trust_mark_jwt() {
 
     let store = InMemoryTrustMarkStore::new();
     let sirtfi = sign_trust_mark(subject(), SIRTFI, None).await;
-    let other = sign_trust_mark(subject(), "https://refeds.org/other", None).await;
+    let other_type = sign_trust_mark(subject(), "https://refeds.org/other", None).await;
+    let other_subject = sign_trust_mark(entity("https://rp.example.org"), SIRTFI, None).await;
     assert!(store
         .insert(IssuedTrustMark::from_jwt(sirtfi.as_str()).unwrap())
         .is_none());
-    assert!(store.insert(IssuedTrustMark::from_jwt(other).unwrap()).is_none());
+    assert!(store.insert(IssuedTrustMark::from_jwt(other_type).unwrap()).is_none());
+    assert!(store
+        .insert(IssuedTrustMark::from_jwt(other_subject.as_str()).unwrap())
+        .is_none());
     assert!(store
         .insert(IssuedTrustMark::from_jwt(sirtfi.as_str()).unwrap())
         .is_some());
-    let of_type = store.trust_marks(SIRTFI).await.unwrap();
-    assert_eq!(of_type.len(), 1);
-    assert_eq!(of_type[0].jwt, sirtfi);
+
+    let mut of_type: Vec<String> = store
+        .trust_marks(SIRTFI, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|issued| issued.jwt)
+        .collect();
+    of_type.sort();
+    let mut expected = vec![sirtfi.clone(), other_subject];
+    expected.sort();
+    assert_eq!(of_type, expected);
+
+    let of_subject = store.trust_marks(SIRTFI, Some(&subject())).await.unwrap();
+    assert_eq!(of_subject.len(), 1);
+    assert_eq!(of_subject[0].jwt, sirtfi);
+    assert!(store
+        .trust_marks(SIRTFI, Some(&entity("https://unknown.example.org")))
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 /// Figures 36 and 37, and a status value a federation defines.
