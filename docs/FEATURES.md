@@ -74,6 +74,12 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | Injectable `HttpClient`; `reqwest` with `rustls` as the default                                       |   ✅   |                                                                                                                          |       |
 | Error responses: `ErrorCode`, `ErrorResponse` served as `EndpointResponse`, parsed into `FederationError::Endpoint` |   ✅   | [Error Responses](https://openid.net/specs/openid-federation-1_0.html#section-8.9)                                       | #36   |
 
+## Issuing side: Trust Anchors and Intermediate Entities
+
+| Feature                                                                                              | Status | Specification                                                                                                            | Issue |
+| ---------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------ | ----- |
+| Entity Configuration endpoint handler (`EntityConfigurationEndpoint`): re-signed before `exp`, mount path from the Entity Identifier |   ✅   | [Obtaining Federation Entity Configuration Information](https://openid.net/specs/openid-federation-1_0.html#section-9)   | #37   |
+
 ## JOSE
 
 | Feature                                                                                              | Status | Specification                                                                                                            | Issue |
