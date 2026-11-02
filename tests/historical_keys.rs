@@ -389,7 +389,11 @@ async fn store_failure_or_a_stale_signer_is_a_server_error() {
     assert!(error.to_string().contains("is not the active key"), "{error}");
 
     // A signer under the active `kid` whose key is not the active public key.
-    let mismatched = HistoricalKeysEndpoint::new(anchor_id(), store, signer(Algorithm::ES256, "ta-2025", EC_P256_DER));
+    let mismatched = HistoricalKeysEndpoint::new(
+        anchor_id(),
+        store.clone(),
+        signer(Algorithm::ES256, "ta-2025", EC_P256_DER),
+    );
     assert_eq!(mismatched.handle().await.status, 500);
     let error = mismatched.try_handle().await.unwrap_err();
     assert!(
@@ -397,4 +401,15 @@ async fn store_failure_or_a_stale_signer_is_a_server_error() {
             && error.to_string().contains("does not sign for the active public key"),
         "{error}"
     );
+
+    // A retired record without `retired_at`, which `FederationKeys::from_records` refuses, is not
+    // left out of the set.
+    let mut records = keys.records().to_vec();
+    let retired = records.iter_mut().find(|record| record.kid() == "ta-2024").unwrap();
+    retired.retired_at = None;
+    store.save(&records).await.unwrap();
+    let endpoint = HistoricalKeysEndpoint::new(anchor_id(), store, keys.active_signer());
+    assert_eq!(endpoint.handle().await.status, 500);
+    let error = endpoint.try_handle().await.unwrap_err();
+    assert!(error.to_string().contains("\"ta-2024\" has no retired_at"), "{error}");
 }

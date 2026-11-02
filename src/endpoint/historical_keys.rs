@@ -63,7 +63,8 @@ impl HistoricalKeysEndpoint {
     ///
     /// [`FederationError::Store`] when the store fails, [`FederationError::Configuration`] when
     /// the signer does not sign for the active key in the store, by its `kid` or, checked by
-    /// verifying the signed set, by its key, and the errors of [`HistoricalKeys::sign`].
+    /// verifying the signed set, by its key, or when a retired key in the store has no
+    /// `retired_at`, and the errors of [`HistoricalKeys::sign`].
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>)
@@ -79,7 +80,16 @@ impl HistoricalKeysEndpoint {
                 )))
             }
         };
-        let keys = records.iter().filter_map(KeyRecord::to_historical_key).collect();
+        // A retired key missing from the set would leave the statements it signed unverifiable.
+        let keys = records
+            .iter()
+            .filter(|record| record.state == KeyState::Retired)
+            .map(|record| {
+                record.to_historical_key().ok_or_else(|| {
+                    FederationError::Configuration(format!("the retired key {:?} has no retired_at", record.kid()))
+                })
+            })
+            .collect::<FederationResult<Vec<_>>>()?;
         let jwt = HistoricalKeys::new(self.issuer.clone(), Utc::now().timestamp(), keys)
             .sign(self.signer.as_ref())
             .await?;
