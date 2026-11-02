@@ -5,14 +5,17 @@
 //! The crate depends on no web framework (ADR 0005). The application parses each request into an
 //! [`EndpointRequest`], a handler answers it with an [`EndpointResponse`], and the application
 //! turns its status, content type and body into the response of its own framework.
-//! [`FetchEndpoint`] serves Subordinate Statements (Section 8.1).
+//! [`FetchEndpoint`] serves Subordinate Statements (Section 8.1) and [`ListEndpoint`] lists the
+//! Immediate Subordinates (Section 8.2).
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
 mod fetch;
+mod list;
 
 pub use fetch::*;
+pub use list::*;
 
 /// The content type of an [`ErrorResponse`] and of the other JSON responses of the federation
 /// endpoints.

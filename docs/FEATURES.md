@@ -79,6 +79,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | Feature                                                                                              | Status | Specification                                                                                                            | Issue |
 | ---------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------ | ----- |
 | Fetch endpoint handler (`FetchEndpoint`) over a `SubordinateStore`, with `InMemorySubordinateStore`; `EndpointRequest` |   ✅   | [Fetching a Subordinate Statement](https://openid.net/specs/openid-federation-1_0.html#section-8.1)                      | #38   |
+| Subordinate listing endpoint handler (`ListEndpoint`): `entity_type` and `intermediate` filters; `trust_marked` and `trust_mark_type` answer `unsupported_parameter` |   ✅   | [Subordinate Listing](https://openid.net/specs/openid-federation-1_0.html#section-8.2)                                   | #39   |
 
 ## JOSE
 
