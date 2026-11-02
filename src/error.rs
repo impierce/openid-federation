@@ -59,6 +59,10 @@ pub enum FederationError {
     #[error("Signing error: {0}")]
     Signing(#[from] SignError),
 
+    /// A [`SubordinateStore`](crate::SubordinateStore) failed.
+    #[error("Store error: {0}")]
+    Store(#[from] StoreError),
+
     /// A federation endpoint, or a configuration endpoint, answered with an HTTP status other than
     /// 2xx
     #[error("{0}")]
@@ -139,3 +143,55 @@ impl StdError for SignError {
 
 /// Result type for OpenID Federation operations.
 pub type FederationResult<T> = Result<T, FederationError>;
+
+/// An error from a [`SubordinateStore`](crate::SubordinateStore).
+///
+/// Stores live in memory and in the application's own database, each with its own error type;
+/// this wraps any of them.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>) and Section 8.2
+/// Subordinate Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
+#[derive(Debug)]
+pub struct StoreError(Box<dyn StdError + Send + Sync + 'static>);
+
+impl StoreError {
+    /// Wraps `error`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>) and Section 8.2
+    /// Subordinate Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
+    pub fn new<E: StdError + Send + Sync + 'static>(error: E) -> Self {
+        Self(Box::new(error))
+    }
+
+    /// Wraps a message.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>) and Section 8.2
+    /// Subordinate Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
+    pub fn msg<M: fmt::Display>(message: M) -> Self {
+        Self(message.to_string().into())
+    }
+
+    /// The wrapped error.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.1 Fetching a Subordinate Statement
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.1>) and Section 8.2
+    /// Subordinate Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.2>)
+    pub fn inner(&self) -> &(dyn StdError + Send + Sync + 'static) {
+        self.0.as_ref()
+    }
+}
+
+impl fmt::Display for StoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl StdError for StoreError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.0.source()
+    }
+}
