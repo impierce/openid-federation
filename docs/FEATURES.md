@@ -47,6 +47,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | Feature                                                                                              | Status | Specification                                                                                                            | Issue |
 | ---------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------ | ----- |
 | `Constraints` as a data type (`max_path_length`, `naming_constraints`, `allowed_entity_types`)        |   ✅   | [Constraints](https://openid.net/specs/openid-federation-1_0.html#chain_constraints)                                     |       |
+| Naming constraints as a type (`NamingConstraints`): domain names checked before issuing, `permits` matches an Entity Identifier's host |   ✅   | [Naming Constraints](https://openid.net/specs/openid-federation-1_0.html#section-6.2.2)                                   | #40   |
 | Enforcing constraints during trust chain validation                                                  |   📋   | [Constraints](https://openid.net/specs/openid-federation-1_0.html#chain_constraints)                                     |       |
 
 ## Trust Marks

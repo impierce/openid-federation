@@ -248,6 +248,8 @@ impl SubordinateStatement {
     /// - No extension claim takes a name this specification or RFC 7519 defines.
     /// - `crit` is not `[]`, has no duplicates, names no claim this specification or RFC 7519
     ///   defines, and names only extension claims present in the statement (Section 13.4).
+    /// - `constraints` pass [`Constraints::validate`](crate::Constraints::validate): naming
+    ///   constraints are fully qualified domain names (Section 6.2.2).
     /// - `metadata_policy_crit` is not `[]`, has no duplicates and names none of the standard
     ///   policy operators (Sections 3.1.3 and 6.1.3.1).
     /// - `source_endpoint` is an `https` URL with a host and without a fragment (Sections 3.1.3
@@ -283,6 +285,10 @@ impl SubordinateStatement {
                     )));
                 }
             }
+        }
+
+        if let Some(constraints) = &self.constraints {
+            constraints.validate()?;
         }
 
         if let Some(operators) = &self.metadata_policy_crit {
@@ -496,7 +502,8 @@ impl SubordinateStatementBuilder {
 
     /// Builds the statement and checks it: [`SubordinateStatement::validate`] (among others,
     /// `iss != sub` and an `exp` in the future), `exp` after `iat`, and the producer rules for
-    /// `crit`, `metadata_policy_crit` and `source_endpoint` (Sections 3.1.3 and 13.4).
+    /// `crit`, `constraints`, `metadata_policy_crit` and `source_endpoint` (Sections 3.1.3, 6.2.2
+    /// and 13.4).
     ///
     /// # Errors
     ///
