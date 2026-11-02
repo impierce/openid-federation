@@ -39,6 +39,13 @@ fn anchor_id() -> EntityId {
 
 /// A Trust Anchor that rolled over from `ta-2024` to `ta-2025` and is now adding `ta-2026`.
 fn rolled_over_keys() -> FederationKeys {
+    let mut keys = activated_keys();
+    keys.retire("ta-2024", 1_700_000_000).unwrap();
+    keys
+}
+
+/// A Trust Anchor that activated `ta-2025` and still publishes `ta-2024` as its previous key.
+fn activated_keys() -> FederationKeys {
     let mut keys = FederationKeys::new(
         signer(Algorithm::ES256, "ta-2024", EC_P256_DER),
         key(EC_P256_JWK, "ta-2024"),
@@ -50,7 +57,6 @@ fn rolled_over_keys() -> FederationKeys {
     )
     .unwrap();
     keys.activate("ta-2025").unwrap();
-    keys.retire("ta-2024", 1_700_000_000).unwrap();
     keys
 }
 
@@ -278,15 +284,66 @@ async fn verified_set_that_cannot_be_published_is_refused() {
 
 #[test]
 fn record_revoked_but_not_retired_is_refused() {
-    let keys = rolled_over_keys();
-    let mut records = keys.records().to_vec();
-    let previous = records.iter_mut().find(|record| record.kid() == "ta-2025").unwrap();
-    previous.revoked = Some(KeyRevocation::new(now(), Some(RevocationReason::Compromised)));
+    let keys = activated_keys();
+    for kid in ["ta-2024", "ta-2025"] {
+        // `ta-2024` is previous, `ta-2025` active.
+        let mut records = keys.records().to_vec();
+        let record = records.iter_mut().find(|record| record.kid() == kid).unwrap();
+        record.revoked = Some(KeyRevocation::new(now(), Some(RevocationReason::Compromised)));
 
-    let error = FederationKeys::from_records(records, [keys.active_signer()])
-        .err()
+        let error = FederationKeys::from_records(records, [keys.active_signer()])
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("revoked but not retired"), "{kid}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn revoking_a_previous_key_retires_and_publishes_it() {
+    let mut keys = activated_keys();
+    keys.revoke("ta-2024", 1_750_000_000, Some(RevocationReason::Compromised))
         .unwrap();
-    assert!(error.to_string().contains("revoked but not retired"), "{error}");
+    assert_eq!(keys.jwks().keys.len(), 1, "a revoked key is not published");
+
+    let store = Arc::new(InMemoryKeyStore::new());
+    store.save(keys.records()).await.unwrap();
+    let response = HistoricalKeysEndpoint::new(anchor_id(), store, keys.active_signer())
+        .handle()
+        .await;
+    let published = HistoricalKeys::from_verified_jwt(&response.body, &anchor_id(), &keys.jwks()).unwrap();
+    assert_eq!(published.keys.len(), 1);
+    let revoked = &published.keys[0];
+    assert_eq!(revoked.key.kid.as_deref(), Some("ta-2024"));
+    assert_eq!(revoked.exp, 1_750_000_000, "revoking a previous key retires it then");
+    assert_eq!(
+        revoked.revoked.as_ref().unwrap().reason,
+        Some(RevocationReason::Compromised)
+    );
+}
+
+#[tokio::test]
+async fn key_that_would_not_parse_or_decode_is_refused() {
+    let keys = rolled_over_keys();
+    let sign = |historical: HistoricalKey| {
+        let signer = keys.active_signer();
+        async move {
+            HistoricalKeys::new(anchor_id(), now(), vec![historical])
+                .sign(signer.as_ref())
+                .await
+        }
+    };
+
+    // An `nbf` that is not a NumericDate, which a verifier would read as the typed `nbf`.
+    let mut historical = keys.historical_keys().remove(0);
+    historical.key.additional.insert("nbf".to_string(), json!("soon"));
+    let error = sign(historical).await.unwrap_err();
+    assert!(error.to_string().contains("would not parse"), "{error}");
+
+    // An RSA key without its modulus.
+    let mut rsa = key(RSA_2048_JWK, "ta-2023");
+    rsa.n = None;
+    let error = sign(HistoricalKey::new(rsa, 1_600_000_000)).await.unwrap_err();
+    assert!(!error.to_string().contains("would not parse"), "{error}");
 }
 
 /// A key store whose database is down.
@@ -319,7 +376,25 @@ async fn store_failure_or_a_stale_signer_is_a_server_error() {
     // The signer of the retired key is no longer the active one.
     let store = Arc::new(InMemoryKeyStore::new());
     store.save(keys.records()).await.unwrap();
-    let stale = HistoricalKeysEndpoint::new(anchor_id(), store, signer(Algorithm::ES256, "ta-2024", EC_P256_DER));
+    let stale = HistoricalKeysEndpoint::new(
+        anchor_id(),
+        store.clone(),
+        signer(Algorithm::ES256, "ta-2024", EC_P256_DER),
+    );
+    let response = stale.handle().await;
+    assert_eq!(response.status, 500);
+    let error: ErrorResponse = serde_json::from_str(&response.body).unwrap();
+    assert_eq!(error.error, ErrorCode::ServerError);
     let error = stale.try_handle().await.unwrap_err();
     assert!(error.to_string().contains("is not the active key"), "{error}");
+
+    // A signer under the active `kid` whose key is not the active public key.
+    let mismatched = HistoricalKeysEndpoint::new(anchor_id(), store, signer(Algorithm::ES256, "ta-2025", EC_P256_DER));
+    assert_eq!(mismatched.handle().await.status, 500);
+    let error = mismatched.try_handle().await.unwrap_err();
+    assert!(
+        matches!(error, FederationError::Configuration(_))
+            && error.to_string().contains("does not sign for the active public key"),
+        "{error}"
+    );
 }

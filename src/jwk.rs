@@ -549,12 +549,13 @@ impl HistoricalKeys {
     /// non-empty `kid`, no two keys share one, and no key carries private or symmetric key
     /// material. Neither does an `additional` map of a key or of its revocation repeat a member
     /// the key or revocation serializes, which would publish that member twice (RFC 7517
-    /// Section 4).
+    /// Section 4). Every key parses back as published, so an `additional` member such as `iat`
+    /// that is not a NumericDate is refused.
     ///
     /// # Errors
     ///
-    /// [`FederationError::InvalidMetadata`] when an `additional` map repeats a member, and the
-    /// errors of [`JwkSet::validate`].
+    /// [`FederationError::InvalidMetadata`] when an `additional` map repeats a member or a key
+    /// would not parse, and the errors of [`JwkSet::validate`].
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
     /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
@@ -580,6 +581,13 @@ impl HistoricalKeys {
                     )));
                 }
             }
+            // An `additional` member a verifier reads as a typed one, such as an `iat` that is
+            // not a NumericDate, would make the whole set fail to parse.
+            serde_json::to_value(historical)
+                .and_then(serde_json::from_value::<HistoricalKey>)
+                .map_err(|err| {
+                    FederationError::InvalidMetadata(format!("historical key {kid:?} would not parse: {err}"))
+                })?;
         }
         JwkSet {
             keys: self.keys.iter().map(|historical| historical.key.clone()).collect(),
@@ -588,17 +596,22 @@ impl HistoricalKeys {
     }
 
     /// Signs the historical keys with `signer`, one of the entity's current Federation Entity
-    /// Keys, as a `jwk-set+jwt` that names the key in `kid`, after [`validate`](Self::validate).
+    /// Keys, as a `jwk-set+jwt` that names the key in `kid`, after [`validate`](Self::validate)
+    /// and after checking that every key has usable key material.
     ///
     /// # Errors
     ///
-    /// The errors of [`validate`](Self::validate) and of
+    /// The errors of [`validate`](Self::validate), of [`Jwk::to_decoding_key`] and of
     /// [`sign_federation_jwt`](crate::sign_federation_jwt).
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
     /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
     pub async fn sign(&self, signer: &dyn crate::Signer) -> FederationResult<String> {
         self.validate()?;
+        // A producer rule: a key without usable key material is no use to a verifier.
+        for historical in &self.keys {
+            historical.key.to_decoding_key()?;
+        }
         crate::sign_federation_jwt(self, crate::JwtArtifactType::SignedJwkSet, signer).await
     }
 

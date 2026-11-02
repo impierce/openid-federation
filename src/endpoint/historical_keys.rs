@@ -3,7 +3,9 @@
 //! Section 8.7).
 
 use super::{EndpointResponse, ErrorCode, ErrorResponse, JWK_SET_CONTENT_TYPE};
-use crate::{EntityId, FederationError, FederationResult, HistoricalKeys, KeyRecord, KeyState, KeyStore, Signer};
+use crate::{
+    EntityId, FederationError, FederationResult, HistoricalKeys, JwkSet, KeyRecord, KeyState, KeyStore, Signer,
+};
 use chrono::Utc;
 use std::fmt;
 use std::sync::Arc;
@@ -60,25 +62,38 @@ impl HistoricalKeysEndpoint {
     /// # Errors
     ///
     /// [`FederationError::Store`] when the store fails, [`FederationError::Configuration`] when
-    /// the signer does not sign for the active key in the store, and the errors of
-    /// [`HistoricalKeys::sign`].
+    /// the signer does not sign for the active key in the store, by its `kid` or, checked by
+    /// verifying the signed set, by its key, and the errors of [`HistoricalKeys::sign`].
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>)
     pub async fn try_handle(&self) -> FederationResult<EndpointResponse> {
         let records = self.keys.load().await?;
-        let active = records.iter().find(|record| record.state == KeyState::Active);
-        if active.map(KeyRecord::kid) != Some(self.signer.kid()) {
-            return Err(FederationError::Configuration(format!(
-                "the historical keys signer {:?} is not the active key in the key store ({:?})",
-                self.signer.kid(),
-                active.map(KeyRecord::kid)
-            )));
-        }
+        let active = match records.iter().find(|record| record.state == KeyState::Active) {
+            Some(active) if active.kid() == self.signer.kid() => active,
+            active => {
+                return Err(FederationError::Configuration(format!(
+                    "the historical keys signer {:?} is not the active key in the key store ({:?})",
+                    self.signer.kid(),
+                    active.map(KeyRecord::kid)
+                )))
+            }
+        };
         let keys = records.iter().filter_map(KeyRecord::to_historical_key).collect();
         let jwt = HistoricalKeys::new(self.issuer.clone(), Utc::now().timestamp(), keys)
             .sign(self.signer.as_ref())
             .await?;
+        // A signer under the active `kid` but with another key would publish a set that no
+        // verifier can check against the entity's `jwks`.
+        let active_key = JwkSet {
+            keys: vec![active.public_key.clone()],
+        };
+        HistoricalKeys::from_verified_jwt(&jwt, &self.issuer, &active_key).map_err(|err| {
+            FederationError::Configuration(format!(
+                "the historical keys signer {:?} does not sign for the active public key: {err}",
+                self.signer.kid()
+            ))
+        })?;
         Ok(EndpointResponse::new(200, JWK_SET_CONTENT_TYPE, jwt))
     }
 }
