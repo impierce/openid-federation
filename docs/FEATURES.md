@@ -39,6 +39,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | `openid_provider`, `openid_relying_party`, `oauth_authorization_server` as typed structs             |   ✅   | [Metadata](https://openid.net/specs/openid-federation-1_0.html#metadata)                                           |       |
 | `oauth_resource` and `oauth_client` as typed structs (untyped JSON objects today)                     |   📋   | [Metadata](https://openid.net/specs/openid-federation-1_0.html#metadata)                                           |       |
 | Metadata policy operators as a data type                                                             |   ✅   | [Metadata Policy](https://openid.net/specs/openid-federation-1_0.html#metadata_policy)                             |       |
+| Validating a metadata policy (`validate_metadata_policy`, `PolicyOperators::validate`): operator values and combinations, additional operators kept, critical ones not understood refused |   ✅   | [Operators](https://openid.net/specs/openid-federation-1_0.html#section-6.1.3)                                         | #41   |
 | Applying a metadata policy to metadata, and merging policies along a chain                           |   📋   | [Enforcement](https://openid.net/specs/openid-federation-1_0.html#metadata_policy_enforcement)                             |       |
 | Resolving the leaf's metadata through the trust chain (`TrustChain::metadata`)                       |   📋   | [Resolving the Trust Chain and Metadata](https://openid.net/specs/openid-federation-1_0.html#resolving_trust)     |       |
 
@@ -81,6 +82,7 @@ implements it; a planned row links to the GitHub issue that tracks it once one e
 | ---------------------------------------------------------------------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------ | ----- |
 | Entity Configuration endpoint handler (`EntityConfigurationEndpoint`): re-signed before `exp`, mount path from the Entity Identifier |   ✅   | [Obtaining Federation Entity Configuration Information](https://openid.net/specs/openid-federation-1_0.html#section-9)   | #37   |
 | Fetch endpoint handler (`FetchEndpoint`) over a `SubordinateStore`, with `InMemorySubordinateStore`; `EndpointRequest` |   ✅   | [Fetching a Subordinate Statement](https://openid.net/specs/openid-federation-1_0.html#section-8.1)                      | #38   |
+| Subordinate listing endpoint handler (`ListEndpoint`): `entity_type` and `intermediate` filters; `trust_marked=true` and `trust_mark_type` answer `unsupported_parameter` |   ✅   | [Subordinate Listing](https://openid.net/specs/openid-federation-1_0.html#section-8.2)                                   | #39   |
 
 ## JOSE
 
