@@ -120,6 +120,42 @@ async fn cached_configuration_is_served_until_it_nears_exp() {
     assert_eq!(first, second);
 }
 
+/// Waits until the clock reads at least `timestamp`, in whole seconds as `iat` and `exp` count.
+async fn wait_until(timestamp: i64) {
+    while chrono::Utc::now().timestamp() < timestamp {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn cached_configuration_is_re_signed_once_it_expires_within_the_refresh_margin() {
+    let signer = Counting::new(signer());
+    let endpoint = EntityConfigurationEndpoint::new(configuration(), signer.clone())
+        .with_lifetime(Duration::seconds(3))
+        .with_refresh_margin(Duration::seconds(1));
+    // Start at the beginning of a second, so the requests below fall in the seconds they name.
+    wait_until(chrono::Utc::now().timestamp() + 1).await;
+
+    let first = endpoint.handle().await;
+    let exp = EntityConfiguration::from_verified_jwt(&first.body, &entity_id())
+        .unwrap()
+        .claims
+        .exp;
+    assert_eq!(signer.calls(), 1);
+
+    // One second before the margin begins, the cached configuration is still served.
+    wait_until(exp - 2).await;
+    assert_eq!(endpoint.handle().await, first);
+    assert_eq!(signer.calls(), 1, "re-signed before exp - refresh_margin");
+
+    // From exp - refresh_margin on, a fresh one is signed.
+    wait_until(exp - 1).await;
+    let refreshed = endpoint.handle().await;
+    assert_eq!(signer.calls(), 2, "not re-signed at exp - refresh_margin");
+    let refreshed = EntityConfiguration::from_verified_jwt(&refreshed.body, &entity_id()).unwrap();
+    assert!(refreshed.claims.exp > exp);
+}
+
 #[tokio::test]
 async fn configuration_within_the_refresh_margin_of_exp_is_re_signed() {
     let signer = Counting::new(signer());
