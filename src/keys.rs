@@ -136,9 +136,10 @@ impl FederationKeys {
     ///
     /// # Errors
     ///
-    /// [`FederationError::Configuration`] when the records do not have exactly one active key,
-    /// repeat a `kid`, publish a key that fails [`JwkSet::validate`], or when the active key or a
-    /// next key has no signer in `signers`.
+    /// [`FederationError::Configuration`] when the records do not have exactly one active key or
+    /// repeat a `kid`, when two signers share a `kid`, or when the active key or a next key has no
+    /// signer in `signers`; the errors of [`JwkSet::validate`] for a published key that cannot be
+    /// published, and of [`Jwk::to_decoding_key`] for one that has no usable key material.
     ///
     /// Reference: OpenID Federation 1.0 - Section 11.2 Key Rollover for a Trust Anchor
     /// <https://openid.net/specs/openid-federation-1_0.html#section-11.2>
@@ -146,10 +147,15 @@ impl FederationKeys {
         records: Vec<KeyRecord>,
         signers: impl IntoIterator<Item = Arc<dyn Signer>>,
     ) -> FederationResult<Self> {
-        let mut signers: HashMap<String, Arc<dyn Signer>> = signers
-            .into_iter()
-            .map(|signer| (signer.kid().to_string(), signer))
-            .collect();
+        let mut by_kid: HashMap<String, Arc<dyn Signer>> = HashMap::new();
+        for signer in signers {
+            let kid = signer.kid().to_string();
+            if by_kid.insert(kid.clone(), signer).is_some() {
+                // Keeping either would be a guess, and the other may not match the published key.
+                return Err(key_error(format!("more than one signer for the kid {kid:?}")));
+            }
+        }
+        let mut signers = by_kid;
         let mut kids = HashSet::new();
         for record in &records {
             if !kids.insert(record.kid()) {
@@ -183,7 +189,11 @@ impl FederationKeys {
         }
         signers.retain(|kid, _| signing.contains(kid.as_str()));
         let keys = Self { records, signers };
-        keys.jwks().validate()?;
+        let published = keys.jwks();
+        published.validate()?;
+        for key in &published.keys {
+            key.to_decoding_key()?;
+        }
         Ok(keys)
     }
 
@@ -193,8 +203,9 @@ impl FederationKeys {
     /// # Errors
     ///
     /// [`FederationError::Configuration`] when the `kid` of `public_key` is missing, differs from
-    /// the signer's, or is already in the set, and the errors of [`JwkSet::validate`] for a key
-    /// that cannot be published, such as one with private members.
+    /// the signer's, or is already in the set, the errors of [`JwkSet::validate`] for a key that
+    /// cannot be published, such as one with private members, and of [`Jwk::to_decoding_key`] for
+    /// one that has no usable key material, such as an RSA key without `n`.
     ///
     /// Reference: OpenID Federation 1.0 - Section 11.2 Key Rollover for a Trust Anchor
     /// <https://openid.net/specs/openid-federation-1_0.html#section-11.2>
@@ -216,6 +227,9 @@ impl FederationKeys {
         let mut published = JwkSet::new();
         published.add_key(public_key.clone());
         published.validate()?;
+        // Verifiers need the key material: a key they cannot decode would publish statements
+        // nobody can verify once it signs.
+        public_key.to_decoding_key()?;
         self.records.push(KeyRecord {
             public_key,
             state,
