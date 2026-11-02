@@ -368,6 +368,246 @@ impl Jwk {
     }
 }
 
+/// A previously used Federation Entity Key, as the historical keys endpoint publishes it: the
+/// public key with its lifetime and, if it was revoked, the revocation.
+///
+/// `kid` is REQUIRED, which [`HistoricalKeys::validate`] checks; `exp` is REQUIRED, so a key
+/// without it does not parse.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+/// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HistoricalKey {
+    /// The public key.
+    #[serde(flatten)]
+    pub key: Jwk,
+    /// When the key was issued, as a NumericDate.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::jwt::numeric_date::deserialize_option"
+    )]
+    pub iat: Option<i64>,
+    /// When the key expires, as a NumericDate. After this time the key MUST NOT be considered
+    /// valid.
+    #[serde(deserialize_with = "crate::jwt::numeric_date::deserialize")]
+    pub exp: i64,
+    /// The time before which the key is not valid, as a NumericDate.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::jwt::numeric_date::deserialize_option"
+    )]
+    pub nbf: Option<i64>,
+    /// The revocation, if the key was revoked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked: Option<KeyRevocation>,
+}
+
+impl HistoricalKey {
+    /// A historical key: `key`, a public key with a `kid`, expiring at `exp`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
+    pub fn new(key: Jwk, exp: i64) -> Self {
+        Self {
+            key,
+            iat: None,
+            exp,
+            nbf: None,
+            revoked: None,
+        }
+    }
+}
+
+/// The revocation of a historical key: when, and optionally why.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+/// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct KeyRevocation {
+    /// When the key was revoked, or must be considered revoked, as a NumericDate.
+    #[serde(deserialize_with = "crate::jwt::numeric_date::deserialize")]
+    pub revoked_at: i64,
+    /// Why the key was revoked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<RevocationReason>,
+    /// Other members of the revocation, which federations may define.
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
+}
+
+impl KeyRevocation {
+    /// A revocation at `revoked_at`, for `reason` if given.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
+    pub fn new(revoked_at: i64, reason: Option<RevocationReason>) -> Self {
+        Self {
+            revoked_at,
+            reason,
+            additional: HashMap::new(),
+        }
+    }
+}
+
+/// Why a Federation Entity Key was revoked.
+///
+/// The reasons the specification defines are variants; any other, which a federation may define,
+/// is [`RevocationReason::Other`]. Parsing a reason the specification defines always yields its
+/// variant.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.7.3 Federation Historical Keys Revocation Reasons
+/// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.3>
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RevocationReason {
+    /// `unspecified`: a general or unspecified reason.
+    Unspecified,
+    /// `compromised`: the private key is believed to have been compromised.
+    Compromised,
+    /// `superseded`: the key is no longer active.
+    Superseded,
+    /// Any other reason, spelled as it is sent.
+    Other(String),
+}
+
+impl RevocationReason {
+    /// The reason as it is spelled on the wire.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.7.3
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.3>
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::Compromised => "compromised",
+            Self::Superseded => "superseded",
+            Self::Other(reason) => reason,
+        }
+    }
+}
+
+impl From<&str> for RevocationReason {
+    fn from(reason: &str) -> Self {
+        match reason {
+            "unspecified" => Self::Unspecified,
+            "compromised" => Self::Compromised,
+            "superseded" => Self::Superseded,
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
+impl Serialize for RevocationReason {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for RevocationReason {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(|reason| Self::from(reason.as_str()))
+    }
+}
+
+/// The claims of a historical keys JWT: the keys an entity used before, signed with one of its
+/// current Federation Entity Keys as a `jwk-set+jwt`.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+/// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HistoricalKeys {
+    /// The Entity Identifier of the entity whose keys these are.
+    pub iss: crate::EntityId,
+    /// When this JWT was issued, as a NumericDate.
+    #[serde(deserialize_with = "crate::jwt::numeric_date::deserialize")]
+    pub iat: i64,
+    /// The historical keys.
+    pub keys: Vec<HistoricalKey>,
+    /// Other claims, which may be defined and used.
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
+}
+
+impl HistoricalKeys {
+    /// The historical keys `keys` of `iss`, issued at `iat`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
+    pub fn new(iss: crate::EntityId, iat: i64, keys: Vec<HistoricalKey>) -> Self {
+        Self {
+            iss,
+            iat,
+            keys,
+            additional: HashMap::new(),
+        }
+    }
+
+    /// Checks that the keys can be published: as for [`JwkSet::validate`], every key has a
+    /// non-empty `kid`, no two keys share one, and no key carries private or symmetric key
+    /// material.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`JwkSet::validate`].
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
+    pub fn validate(&self) -> FederationResult<()> {
+        JwkSet {
+            keys: self.keys.iter().map(|historical| historical.key.clone()).collect(),
+        }
+        .validate()
+    }
+
+    /// Signs the historical keys with `signer`, one of the entity's current Federation Entity
+    /// Keys, as a `jwk-set+jwt` that names the key in `kid`, after [`validate`](Self::validate).
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`validate`](Self::validate) and of
+    /// [`sign_federation_jwt`](crate::sign_federation_jwt).
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
+    pub async fn sign(&self, signer: &dyn crate::Signer) -> FederationResult<String> {
+        self.validate()?;
+        crate::sign_federation_jwt(self, crate::JwtArtifactType::SignedJwkSet, signer).await
+    }
+
+    /// Decodes and authenticates a historical keys JWT published by `issuer`: it must be typed
+    /// `jwk-set+jwt`, be signed with a key from `issuer_jwks`, the issuer's current keys, under
+    /// the `kid` it names, and have `iss` equal to `issuer`.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidSubordinateStatement`] when `iss` is another entity, and the
+    /// errors of verifying the JWT.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>
+    pub fn from_verified_jwt(jwt: &str, issuer: &crate::EntityId, issuer_jwks: &JwkSet) -> FederationResult<Self> {
+        // A historical keys JWT has no `exp`; its keys carry their own.
+        let mut validation = jsonwebtoken::Validation::default();
+        validation.required_spec_claims.clear();
+        validation.leeway = 60;
+        let keys: Self = crate::JwtProcessor::with_validation(validation).verify_jwt_with_jwks(
+            jwt,
+            issuer_jwks,
+            crate::JwtArtifactType::SignedJwkSet,
+        )?;
+        if keys.iss != *issuer {
+            return Err(FederationError::InvalidSubordinateStatement(format!(
+                "historical keys of {} were issued by {}",
+                issuer, keys.iss
+            )));
+        }
+        Ok(keys)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
