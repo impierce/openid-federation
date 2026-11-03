@@ -9,6 +9,7 @@ use crate::{
     JwkSet, JwtArtifactType, JwtProcessor, SubordinateStatement, TrustChain, TrustMark, TrustMarkDelegation,
     TrustMarkEntry,
 };
+use std::collections::HashMap;
 use std::fmt;
 
 /// The step at which a Trust Mark failed verification, see [`TrustMark::from_verified_jwt`]. It
@@ -159,37 +160,7 @@ fn verify(
     issuer_keys: &JwkSet,
     trust_anchor: &EntityConfiguration,
 ) -> FederationResult<TrustMark> {
-    let header = jsonwebtoken::decode_header(jwt).map_err(|err| TrustMarkRejection::NotATrustMark(err.to_string()))?;
-    JwtArtifactType::TrustMark
-        .validate_header_typ(header.typ.as_deref())
-        .map_err(|err| TrustMarkRejection::NotATrustMark(err.to_string()))?;
-    let unverified: TrustMark =
-        extract_claims_unverified(jwt).map_err(|err| TrustMarkRejection::NotATrustMark(err.to_string()))?;
-
-    if unverified.sub != *subject {
-        return Err(TrustMarkRejection::SubjectMismatch {
-            expected: subject.clone(),
-            sub: unverified.sub,
-        }
-        .into());
-    }
-    if unverified.iss != *issuer {
-        return Err(TrustMarkRejection::IssuerMismatch {
-            expected: issuer.clone(),
-            iss: unverified.iss,
-        }
-        .into());
-    }
-    let now = chrono::Utc::now().timestamp();
-    if unverified.iat > now.saturating_add(CLOCK_SKEW_LEEWAY) {
-        return Err(TrustMarkRejection::IssuedInFuture.into());
-    }
-    if unverified
-        .exp
-        .is_some_and(|exp| exp < now.saturating_sub(CLOCK_SKEW_LEEWAY))
-    {
-        return Err(TrustMarkRejection::Expired.into());
-    }
+    check_unverified(jwt, subject, issuer)?;
 
     let trust_mark: TrustMark = JwtProcessor::new()
         .verify_jwt_with_jwks(jwt, issuer_keys, JwtArtifactType::TrustMark)
@@ -202,14 +173,7 @@ fn verify(
     .validate()
     .map_err(|err| TrustMarkRejection::Invalid(err.to_string()))?;
 
-    let recognized_issuers = trust_anchor
-        .trust_mark_issuers
-        .as_ref()
-        .and_then(|issuers| issuers.by_type.get(&trust_mark.trust_mark_type))
-        .ok_or(TrustMarkRejection::TypeNotRecognized)?;
-    if !recognized_issuers.is_empty() && !recognized_issuers.contains(issuer) {
-        return Err(TrustMarkRejection::IssuerNotRecognized.into());
-    }
+    check_recognized(&trust_mark.trust_mark_type, issuer, trust_anchor)?;
 
     let owner = trust_anchor
         .trust_mark_owners
@@ -258,6 +222,63 @@ fn verify(
     Ok(trust_mark)
 }
 
+/// Steps 1 to 3 of [`TrustMark::from_verified_jwt`], which need no key: the header's `typ`, the
+/// Trust Mark claims, `sub`, `iss` and the time claims, read before the signature is checked.
+fn check_unverified(jwt: &str, subject: &EntityId, issuer: &EntityId) -> FederationResult<TrustMark> {
+    let header = jsonwebtoken::decode_header(jwt).map_err(|err| TrustMarkRejection::NotATrustMark(err.to_string()))?;
+    JwtArtifactType::TrustMark
+        .validate_header_typ(header.typ.as_deref())
+        .map_err(|err| TrustMarkRejection::NotATrustMark(err.to_string()))?;
+    let unverified: TrustMark =
+        extract_claims_unverified(jwt).map_err(|err| TrustMarkRejection::NotATrustMark(err.to_string()))?;
+
+    if unverified.sub != *subject {
+        return Err(TrustMarkRejection::SubjectMismatch {
+            expected: subject.clone(),
+            sub: unverified.sub,
+        }
+        .into());
+    }
+    if unverified.iss != *issuer {
+        return Err(TrustMarkRejection::IssuerMismatch {
+            expected: issuer.clone(),
+            iss: unverified.iss,
+        }
+        .into());
+    }
+    let now = chrono::Utc::now().timestamp();
+    if unverified.iat > now.saturating_add(CLOCK_SKEW_LEEWAY) {
+        return Err(TrustMarkRejection::IssuedInFuture.into());
+    }
+    if unverified
+        .exp
+        .is_some_and(|exp| exp < now.saturating_sub(CLOCK_SKEW_LEEWAY))
+    {
+        return Err(TrustMarkRejection::Expired.into());
+    }
+
+    Ok(unverified)
+}
+
+/// Step 6 of [`TrustMark::from_verified_jwt`]: the Trust Anchor's `trust_mark_issuers` lists
+/// `trust_mark_type`, and either lists no issuer for it or lists `issuer` (Sections 3.1.2 and
+/// 17.5).
+fn check_recognized(
+    trust_mark_type: &str,
+    issuer: &EntityId,
+    trust_anchor: &EntityConfiguration,
+) -> FederationResult<()> {
+    let recognized_issuers = trust_anchor
+        .trust_mark_issuers
+        .as_ref()
+        .and_then(|issuers| issuers.by_type.get(trust_mark_type))
+        .ok_or(TrustMarkRejection::TypeNotRecognized)?;
+    if !recognized_issuers.is_empty() && !recognized_issuers.contains(issuer) {
+        return Err(TrustMarkRejection::IssuerNotRecognized.into());
+    }
+    Ok(())
+}
+
 impl FederationClient {
     /// Verifies a Trust Mark that `subject` presents, under the Trust Anchor `trust_anchor`.
     ///
@@ -267,6 +288,11 @@ impl FederationClient {
     /// issuer to the Trust Anchor is discovered with
     /// [`discover_trust_chain`](Self::discover_trust_chain), and the keys the issuer's Immediate
     /// Superior endorses verify it. Then [`TrustMark::from_verified_jwt`] runs its checks.
+    ///
+    /// The checks that need no key run before discovery: the Trust Mark's type and claims, its
+    /// `sub`, its time claims, and whether the Trust Anchor recognizes its issuer for its type. A
+    /// Trust Mark that fails them is rejected without a request to the issuer it names, which is
+    /// not authenticated yet.
     ///
     /// The caller decides whether it trusts `trust_anchor`, as for discovery.
     ///
@@ -284,7 +310,7 @@ impl FederationClient {
         trust_anchor: &EntityId,
     ) -> FederationResult<TrustMark> {
         let (_, configuration) = self.resolve_entity_configuration(trust_anchor).await?;
-        self.verify_trust_mark_under(trust_mark, subject, trust_anchor, &configuration)
+        self.verify_trust_mark_under(trust_mark, subject, trust_anchor, &configuration, &mut HashMap::new())
             .await
     }
 
@@ -295,11 +321,13 @@ impl FederationClient {
     ///
     /// Each Trust Mark is verified as [`verify_trust_mark`](Self::verify_trust_mark) does, with
     /// the chain's own Trust Anchor configuration. Those that do not verify are returned, with
-    /// why; they are not stored.
+    /// why; they are not stored. Each issuer's Trust Chain is discovered once per call, and a
+    /// Trust Mark the leaf issues itself is verified with the keys `chain` endorses for it.
     ///
     /// # Errors
     ///
-    /// The errors of reading the leaf's and the Trust Anchor's configurations from `chain`.
+    /// The errors of reading the leaf's configuration, the keys endorsed for it and the Trust
+    /// Anchor's configuration from `chain`.
     ///
     /// Reference: OpenID Federation 1.0 - Section 7.3 Validating a Trust Mark
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-7.3>)
@@ -307,11 +335,18 @@ impl FederationClient {
         let (subject, leaf) = chain.leaf_entity_id_and_configuration()?;
         let (anchor, anchor_configuration) = chain.trust_anchor_entity_id_and_configuration()?;
 
+        let mut issuer_keys = HashMap::from([(subject.clone(), endorsed_keys(chain)?)]);
         let mut verified = Vec::new();
         let mut failures = Vec::new();
         for entry in leaf.trust_marks.into_iter().flatten() {
             match self
-                .verify_trust_mark_under(&entry.trust_mark, &subject, &anchor, &anchor_configuration)
+                .verify_trust_mark_under(
+                    &entry.trust_mark,
+                    &subject,
+                    &anchor,
+                    &anchor_configuration,
+                    &mut issuer_keys,
+                )
                 .await
             {
                 Ok(trust_mark) => verified.push(trust_mark),
@@ -323,26 +358,37 @@ impl FederationClient {
     }
 
     /// [`verify_trust_mark`](Self::verify_trust_mark) with the Trust Anchor's configuration at
-    /// hand.
+    /// hand. `issuer_keys` holds the keys already authenticated for an issuer, and gains those of
+    /// each issuer whose Trust Chain is discovered.
     async fn verify_trust_mark_under(
         &self,
         trust_mark: &str,
         subject: &EntityId,
         anchor: &EntityId,
         anchor_configuration: &EntityConfiguration,
+        issuer_keys: &mut HashMap<EntityId, JwkSet>,
     ) -> FederationResult<TrustMark> {
-        let unverified: TrustMark =
-            extract_claims_unverified(trust_mark).map_err(|err| TrustMarkRejection::NotATrustMark(err.to_string()))?;
-        let issuer = unverified.iss;
-        let issuer_keys = if issuer == *anchor {
+        let issuer = extract_claims_unverified::<TrustMark>(trust_mark)
+            .map_err(|err| TrustMarkRejection::NotATrustMark(err.to_string()))?
+            .iss;
+        // The checks that need no key come first, so that a Trust Mark failing them causes no
+        // request to the issuer it names.
+        let unverified = check_unverified(trust_mark, subject, &issuer)?;
+        check_recognized(&unverified.trust_mark_type, &issuer, anchor_configuration)?;
+
+        let keys = if issuer == *anchor {
             anchor_configuration.jwks.clone()
+        } else if let Some(keys) = issuer_keys.get(&issuer) {
+            keys.clone()
         } else {
             let chain = self
                 .discover_trust_chain(&issuer, Some(std::slice::from_ref(anchor)))
                 .await?;
-            endorsed_keys(&chain)?
+            let keys = endorsed_keys(&chain)?;
+            issuer_keys.insert(issuer.clone(), keys.clone());
+            keys
         };
-        TrustMark::from_verified_jwt(trust_mark, subject, &issuer, &issuer_keys, anchor_configuration)
+        TrustMark::from_verified_jwt(trust_mark, subject, &issuer, &keys, anchor_configuration)
     }
 }
 

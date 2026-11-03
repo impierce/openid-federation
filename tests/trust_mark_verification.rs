@@ -17,6 +17,7 @@ use openid_federation::{
 };
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use url::Url;
 
 const EC_P256_DER: &[u8] = include_bytes!("data/signer/ec-p256.pkcs8.der");
@@ -229,6 +230,29 @@ async fn trust_mark_itself_is_checked_before_the_trust_anchor_policy() {
     let expired = sign(&expired, JwtArtifactType::TrustMark, &issuer_signer()).await;
     assert_eq!(rejection(verify(&expired, &anchor)), TrustMarkRejection::Expired);
 
+    // Within the 60 seconds of clock skew on either side, and beyond them.
+    for (iat, exp, rejected) in [
+        (now() + 30, now() + 3600, None),
+        (now() + 120, now() + 3600, Some(TrustMarkRejection::IssuedInFuture)),
+        (now() - 3600, now() - 30, None),
+        (now() - 3600, now() - 120, Some(TrustMarkRejection::Expired)),
+    ] {
+        let claims = TrustMark {
+            iat,
+            exp: Some(exp),
+            ..sirtfi(None)
+        };
+        let jwt = sign(&claims, JwtArtifactType::TrustMark, &issuer_signer()).await;
+        match rejected {
+            None => assert_eq!(verify(&jwt, &anchor).unwrap(), claims, "iat {iat}, exp {exp}"),
+            Some(rejection) => assert_eq!(
+                self::rejection(verify(&jwt, &anchor)),
+                rejection,
+                "iat {iat}, exp {exp}"
+            ),
+        }
+    }
+
     // Signed under the issuer's `kid` with another key.
     let impostor = InMemorySigner::from_der(Algorithm::EdDSA, "tmi-key", ED25519_DER).unwrap();
     let forged = sign(&sirtfi(None), JwtArtifactType::TrustMark, &impostor).await;
@@ -370,11 +394,14 @@ async fn owned_type_needs_a_delegation_from_its_owner() {
 struct Federation {
     configurations: HashMap<String, String>,
     statements: HashMap<String, String>,
+    /// Every URL requested, in order.
+    requests: Arc<Mutex<Vec<String>>>,
 }
 
 #[async_trait]
 impl HttpClient for Federation {
     async fn get(&self, url: Url) -> FederationResult<HttpResponse> {
+        self.requests.lock().unwrap().push(url.to_string());
         let host = url.host_str().unwrap_or_default().to_string();
         let body = match url.path() {
             "/.well-known/openid-federation" => self.configurations.get(&host),
@@ -427,7 +454,19 @@ async fn federation(issuer_jwks: JwkSet, trust_marks: Vec<TrustMarkEntry>) -> Fe
                     .unwrap(),
             ),
         ]),
+        requests: Arc::default(),
     }
+}
+
+/// How many of `requests` ask for the Entity Configuration of `entity`.
+fn configuration_requests(requests: &Mutex<Vec<String>>, entity: &str) -> usize {
+    let url = format!("{entity}/.well-known/openid-federation");
+    requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| **request == url)
+        .count()
 }
 
 #[tokio::test]
@@ -439,13 +478,76 @@ async fn client_trusts_the_issuer_through_its_trust_chain_first() {
         .await
         .unwrap();
     assert_eq!(verified.trust_mark_type, SIRTFI);
+}
 
-    // A Trust Anchor the issuer has no Trust Chain to cannot verify it.
+#[tokio::test]
+async fn client_needs_a_trust_chain_from_the_issuer_to_the_trust_anchor() {
+    // Another Trust Anchor, served and recognizing the issuer for the type, that the issuer has
+    // no Trust Chain to.
+    const OTHER_ANCHOR: &str = "https://other-ta.example.org";
+    let mut other = anchor(&[(SIRTFI, &[TMI])], true);
+    other.claims.iss = entity(OTHER_ANCHOR);
+    other.claims.sub = entity(OTHER_ANCHOR);
+    let mut federation = federation(issuer_keys(), vec![]).await;
+    federation.configurations.insert(
+        "other-ta.example.org".to_string(),
+        other.sign(&anchor_signer()).await.unwrap(),
+    );
+    let requests = federation.requests.clone();
+    let client = FederationClient::with_http_client(federation);
+
     let error = client
-        .verify_trust_mark(&jwt, &entity(SUBJECT), &entity("https://other-ta.example.org"))
+        .verify_trust_mark(&delegated_sirtfi().await, &entity(SUBJECT), &entity(OTHER_ANCHOR))
         .await
         .unwrap_err();
-    assert!(!matches!(error, FederationError::TrustMarkRejected(_)), "{error:?}");
+    assert!(
+        matches!(&error, FederationError::EntityResolution(message) if message.contains(TMI)),
+        "the issuer's Trust Chain discovery fails: {error:?}"
+    );
+    assert!(
+        configuration_requests(&requests, TMI) > 0,
+        "discovery reached the issuer"
+    );
+}
+
+#[tokio::test]
+async fn client_rejects_what_needs_no_key_before_contacting_the_issuer() {
+    let federation = federation(issuer_keys(), vec![]).await;
+    let requests = federation.requests.clone();
+    let client = FederationClient::with_http_client(federation);
+
+    // An issuer the Trust Anchor does not recognize, which would be an internal host.
+    const UNKNOWN: &str = "https://internal.example.org";
+    let unknown = TrustMark::new(entity(UNKNOWN), entity(SUBJECT), SIRTFI, now() - 60);
+    let unknown = sign(&unknown, JwtArtifactType::TrustMark, &issuer_signer()).await;
+    // A recognized issuer, but about another entity, or expired.
+    let jwt = delegated_sirtfi().await;
+    let expired = TrustMark {
+        iat: now() - 7200,
+        exp: Some(now() - 3600),
+        ..sirtfi(None)
+    };
+    let expired = sign(&expired, JwtArtifactType::TrustMark, &issuer_signer()).await;
+
+    for (trust_mark, subject, expected) in [
+        (&unknown, SUBJECT, TrustMarkRejection::IssuerNotRecognized),
+        (
+            &jwt,
+            "https://other.example.org",
+            TrustMarkRejection::SubjectMismatch {
+                expected: entity("https://other.example.org"),
+                sub: entity(SUBJECT),
+            },
+        ),
+        (&expired, SUBJECT, TrustMarkRejection::Expired),
+    ] {
+        let result = client
+            .verify_trust_mark(trust_mark, &entity(subject), &entity(ANCHOR))
+            .await;
+        assert_eq!(rejection(result), expected);
+    }
+    assert_eq!(configuration_requests(&requests, UNKNOWN), 0);
+    assert_eq!(configuration_requests(&requests, TMI), 0);
 }
 
 #[tokio::test]
@@ -501,8 +603,28 @@ async fn chain_keeps_the_trust_marks_of_its_leaf_that_verify() {
         trust_mark_type: SIRTFI.to_string(),
         trust_mark: sign(&sirtfi(None), JwtArtifactType::TrustMark, &issuer_signer()).await,
     };
-    let client =
-        FederationClient::with_http_client(federation(issuer_keys(), vec![valid.clone(), undelegated.clone()]).await);
+    // A Trust Mark the leaf issues about itself, of a type the Trust Anchor lets it issue.
+    const SELF_ISSUED: &str = "https://entity.example.org/self";
+    let subject_signer = InMemorySigner::from_der(Algorithm::ES256, "entity-key", EC_P256_DER).unwrap();
+    let self_issued = TrustMarkEntry {
+        trust_mark_type: SELF_ISSUED.to_string(),
+        trust_mark: TrustMark::new(entity(SUBJECT), entity(SUBJECT), SELF_ISSUED, now() - 60)
+            .sign(&subject_signer)
+            .await
+            .unwrap(),
+    };
+    let mut federation = federation(
+        issuer_keys(),
+        vec![valid.clone(), undelegated.clone(), self_issued.clone()],
+    )
+    .await;
+    let anchor = anchor(&[(SIRTFI, &[TMI]), (SELF_ISSUED, &[SUBJECT])], true);
+    federation.configurations.insert(
+        "ta.example.org".to_string(),
+        anchor.sign(&anchor_signer()).await.unwrap(),
+    );
+    let requests = federation.requests.clone();
+    let client = FederationClient::with_http_client(federation);
 
     let mut chain = client
         .discover_trust_chain(&entity(SUBJECT), Some(&[entity(ANCHOR)]))
@@ -513,10 +635,34 @@ async fn chain_keeps_the_trust_marks_of_its_leaf_that_verify() {
         "discovery does not verify Trust Marks by itself"
     );
 
+    // The requests for the issuer's configuration that one discovery of its Trust Chain makes.
+    let start = configuration_requests(&requests, TMI);
+    client
+        .discover_trust_chain(&entity(TMI), Some(&[entity(ANCHOR)]))
+        .await
+        .unwrap();
+    let per_discovery = configuration_requests(&requests, TMI) - start;
+    assert!(per_discovery > 0);
+
+    let before = (
+        configuration_requests(&requests, TMI),
+        configuration_requests(&requests, SUBJECT),
+    );
     let failures = client.verify_chain_trust_marks(&mut chain).await.unwrap();
+    assert_eq!(
+        configuration_requests(&requests, TMI),
+        before.0 + per_discovery,
+        "the issuer of two Trust Marks is discovered once"
+    );
+    assert_eq!(
+        configuration_requests(&requests, SUBJECT),
+        before.1,
+        "the leaf's own Trust Mark uses the keys the chain endorses"
+    );
     let verified = chain.trust_marks.unwrap();
-    assert_eq!(verified.len(), 1);
+    assert_eq!(verified.len(), 2);
     assert!(verified[0].delegation.is_some());
+    assert_eq!(verified[1].trust_mark_type, SELF_ISSUED);
     assert_eq!(failures.len(), 1);
     assert_eq!(failures[0].entry, undelegated);
     match &failures[0].error {
