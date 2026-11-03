@@ -2,6 +2,7 @@
 //! Trust Anchor or Intermediate Entity registered, and the Trust Marks a Trust Mark Issuer issued,
 //! each behind an async trait with an in-memory implementation (ADR 0005).
 
+use crate::jwt::CLOCK_SKEW_LEEWAY;
 use crate::{
     extract_claims_unverified, Constraints, EntityId, EntityMetadata, EntityType, FederationError, FederationResult,
     JwkSet, JwtArtifactType, PolicyOperators, StoreError, SubordinateStatement, SubordinateStatementBuilder, TrustMark,
@@ -267,7 +268,8 @@ impl IssuedTrustMark {
     }
 
     /// The status of the Trust Mark at `now`: `revoked` once it was revoked, else `expired` from
-    /// its `exp` on, else `active`.
+    /// its `exp` on, else `invalid` while its `iat` is more than the clock skew leeway (60
+    /// seconds) after `now`, as [`TrustMark::validate`] refuses it, else `active`.
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.4.2 Trust Mark Status Response
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4.2>)
@@ -276,6 +278,9 @@ impl IssuedTrustMark {
             TrustMarkStatus::Revoked
         } else if self.claims.exp.is_some_and(|exp| exp <= now) {
             TrustMarkStatus::Expired
+        } else if self.claims.iat > now.saturating_add(CLOCK_SKEW_LEEWAY) {
+            // Not issued yet: a relying party refuses it until then, so it is not active.
+            TrustMarkStatus::Invalid
         } else {
             TrustMarkStatus::Active
         }
@@ -311,16 +316,19 @@ pub trait TrustMarkStore: Send + Sync {
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4>)
     async fn trust_mark(&self, jwt: &str) -> Result<Option<IssuedTrustMark>, StoreError>;
 
-    /// Every issued Trust Mark of `trust_mark_type`, and only those issued to `sub` when it is
-    /// given, revoked and expired ones included, in no particular order. An implementation on a
-    /// database answers it from an index on the type and the subject.
+    /// Every issued Trust Mark, only those of `trust_mark_type` when it is given and only those
+    /// issued to `sub` when it is given, revoked and expired ones included, in no particular
+    /// order. An implementation on a database answers it from an index on the type and the
+    /// subject.
     ///
-    /// Reference: OpenID Federation 1.0 - Section 8.5 Trust Marked Entities Listing
-    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.5>) and Section 8.6 Trust
-    /// Mark Endpoint (<https://openid.net/specs/openid-federation-1_0.html#section-8.6>)
+    /// Reference: OpenID Federation 1.0 - Section 8.2.1 Subordinate Listing Request
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.2.1>), Section 8.5 Trust
+    /// Marked Entities Listing (<https://openid.net/specs/openid-federation-1_0.html#section-8.5>)
+    /// and Section 8.6 Trust Mark Endpoint
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.6>)
     async fn trust_marks(
         &self,
-        trust_mark_type: &str,
+        trust_mark_type: Option<&str>,
         sub: Option<&EntityId>,
     ) -> Result<Vec<IssuedTrustMark>, StoreError>;
 }
@@ -385,7 +393,7 @@ impl TrustMarkStore for InMemoryTrustMarkStore {
 
     async fn trust_marks(
         &self,
-        trust_mark_type: &str,
+        trust_mark_type: Option<&str>,
         sub: Option<&EntityId>,
     ) -> Result<Vec<IssuedTrustMark>, StoreError> {
         Ok(self
@@ -394,7 +402,7 @@ impl TrustMarkStore for InMemoryTrustMarkStore {
             .unwrap_or_else(PoisonError::into_inner)
             .values()
             .filter(|trust_mark| {
-                trust_mark.claims.trust_mark_type == trust_mark_type
+                trust_mark_type.is_none_or(|trust_mark_type| trust_mark.claims.trust_mark_type == trust_mark_type)
                     && sub.is_none_or(|sub| trust_mark.claims.sub == *sub)
             })
             .cloned()

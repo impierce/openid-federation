@@ -220,7 +220,7 @@ impl TrustMarkStore for BrokenStore {
 
     async fn trust_marks(
         &self,
-        _trust_mark_type: &str,
+        _trust_mark_type: Option<&str>,
         _sub: Option<&EntityId>,
     ) -> Result<Vec<IssuedTrustMark>, StoreError> {
         Ok(Vec::new())
@@ -281,7 +281,9 @@ async fn issued_trust_mark_must_be_a_trust_mark_jwt() {
     assert!(store
         .insert(IssuedTrustMark::from_jwt(sirtfi.as_str()).unwrap())
         .is_none());
-    assert!(store.insert(IssuedTrustMark::from_jwt(other_type).unwrap()).is_none());
+    assert!(store
+        .insert(IssuedTrustMark::from_jwt(other_type.as_str()).unwrap())
+        .is_none());
     assert!(store
         .insert(IssuedTrustMark::from_jwt(other_subject.as_str()).unwrap())
         .is_none());
@@ -290,7 +292,7 @@ async fn issued_trust_mark_must_be_a_trust_mark_jwt() {
         .is_some());
 
     let mut of_type: Vec<String> = store
-        .trust_marks(SIRTFI, None)
+        .trust_marks(Some(SIRTFI), None)
         .await
         .unwrap()
         .into_iter()
@@ -301,14 +303,66 @@ async fn issued_trust_mark_must_be_a_trust_mark_jwt() {
     expected.sort();
     assert_eq!(of_type, expected);
 
-    let of_subject = store.trust_marks(SIRTFI, Some(&subject())).await.unwrap();
+    let of_subject = store.trust_marks(Some(SIRTFI), Some(&subject())).await.unwrap();
     assert_eq!(of_subject.len(), 1);
     assert_eq!(of_subject[0].jwt, sirtfi);
     assert!(store
-        .trust_marks(SIRTFI, Some(&entity("https://unknown.example.org")))
+        .trust_marks(Some(SIRTFI), Some(&entity("https://unknown.example.org")))
         .await
         .unwrap()
         .is_empty());
+
+    // Without a type, every type.
+    let mut of_any_type: Vec<String> = store
+        .trust_marks(None, Some(&subject()))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|issued| issued.jwt)
+        .collect();
+    of_any_type.sort();
+    let mut expected = vec![sirtfi, other_type];
+    expected.sort();
+    assert_eq!(of_any_type, expected);
+    assert_eq!(store.trust_marks(None, None).await.unwrap().len(), 3);
+
+    // Revoked and expired Trust Marks are returned too.
+    let revoked = sign_trust_mark(subject(), "https://refeds.org/revoked", None).await;
+    let expired = sign_trust_mark(subject(), "https://refeds.org/expired", Some(now() - 60)).await;
+    for jwt in [&revoked, &expired] {
+        assert!(store.insert(IssuedTrustMark::from_jwt(jwt.as_str()).unwrap()).is_none());
+    }
+    assert!(store.revoke(&revoked, now()));
+    let of_subject: Vec<String> = store
+        .trust_marks(None, Some(&subject()))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|issued| issued.jwt)
+        .collect();
+    assert_eq!(of_subject.len(), 4);
+    assert!(of_subject.contains(&revoked) && of_subject.contains(&expired));
+    assert_eq!(store.trust_marks(None, None).await.unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn trust_mark_issued_in_the_future_is_invalid_until_then() {
+    let iat = now() + 3600;
+    let trust_mark = TrustMark::new(issuer(), subject(), SIRTFI, iat);
+    // Signed without `TrustMark::sign`, which refuses an `iat` in the future.
+    let jwt = sign_federation_jwt(&trust_mark, JwtArtifactType::TrustMark, &signer())
+        .await
+        .unwrap();
+    let issued = IssuedTrustMark::from_jwt(jwt.as_str()).unwrap();
+
+    // Within the clock skew leeway of 60 seconds it counts as issued.
+    assert_eq!(issued.status_at(iat - 61), TrustMarkStatus::Invalid);
+    assert_eq!(issued.status_at(iat - 60), TrustMarkStatus::Active);
+
+    let store = Arc::new(InMemoryTrustMarkStore::new());
+    store.insert(issued);
+    let response = endpoint(store).handle(&status_request(&jwt)).await;
+    assert_eq!(status_of(&response, &jwt), TrustMarkStatus::Invalid);
 }
 
 /// Figures 36 and 37, and a status value a federation defines.

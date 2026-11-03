@@ -8,8 +8,12 @@
 //! [`EntityConfigurationEndpoint`] serves an entity's Entity Configuration (Section 9),
 //! [`FetchEndpoint`] serves Subordinate Statements (Section 8.1), [`ListEndpoint`] lists the
 //! Immediate Subordinates (Section 8.2) and [`HistoricalKeysEndpoint`] publishes the entity's
-//! previous keys (Section 8.7).
+//! previous keys (Section 8.7). A Trust Mark Issuer reports the status of its Trust Marks with
+//! [`TrustMarkStatusEndpoint`] (Section 8.4), lists the entities holding them with
+//! [`TrustMarkedEntitiesEndpoint`] (Section 8.5) and serves them with [`TrustMarkEndpoint`]
+//! (Section 8.6).
 
+use crate::{EntityId, UrlValidator};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
@@ -17,13 +21,17 @@ mod entity_configuration;
 mod fetch;
 mod historical_keys;
 mod list;
+mod trust_mark;
 mod trust_mark_status;
+mod trust_marked_entities;
 
 pub use entity_configuration::*;
 pub use fetch::*;
 pub use historical_keys::*;
 pub use list::*;
+pub use trust_mark::*;
 pub use trust_mark_status::*;
+pub use trust_marked_entities::*;
 
 /// The content type of an [`ErrorResponse`] and of the other JSON responses of the federation
 /// endpoints.
@@ -51,6 +59,12 @@ pub const JWK_SET_CONTENT_TYPE: &str = "application/jwk-set+jwt";
 /// Reference: OpenID Federation 1.0 - Section 8.4.2 Trust Mark Status Response
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4.2>)
 pub const TRUST_MARK_STATUS_RESPONSE_CONTENT_TYPE: &str = "application/trust-mark-status-response+jwt";
+
+/// The content type of a successful Trust Mark response: the Trust Mark JWT.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.6.2 Trust Mark Response
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.6.2>)
+pub const TRUST_MARK_CONTENT_TYPE: &str = "application/trust-mark+jwt";
 
 /// What a federation endpoint handler answers: the HTTP status, the content type and the body.
 ///
@@ -188,6 +202,33 @@ impl EndpointRequest {
         }
         Ok(value)
     }
+}
+
+/// The value of the parameter `name`, which the request must have once.
+fn required_parameter<'a>(request: &'a EndpointRequest, name: &str) -> Result<&'a str, ErrorResponse> {
+    request
+        .parameter(name)?
+        .ok_or_else(|| ErrorResponse::new(ErrorCode::InvalidRequest, format!("the {name} parameter is required")))
+}
+
+/// The Entity Identifier in the parameter `name`, or `None` when the request does not have it.
+///
+/// An Entity Identifier is an `https` URL with a host and no fragment (Section 1.2), so anything
+/// else is a malformed request, not an unknown entity.
+fn entity_id_parameter(request: &EndpointRequest, name: &str) -> Result<Option<EntityId>, ErrorResponse> {
+    let Some(value) = request.parameter(name)? else {
+        return Ok(None);
+    };
+    EntityId::parse(value)
+        .ok()
+        .filter(|entity_id| UrlValidator::validate_entity_id(entity_id.as_url()).is_ok())
+        .map(Some)
+        .ok_or_else(|| {
+            ErrorResponse::new(
+                ErrorCode::InvalidRequest,
+                format!("the {name} parameter is not an Entity Identifier"),
+            )
+        })
 }
 
 fn parse_form(form: &str) -> Vec<(String, String)> {
