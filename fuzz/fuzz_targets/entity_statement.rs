@@ -58,8 +58,15 @@ fuzz_target!(|data: &[u8]| {
                 metadata_of_type.is_object()
             );
         }
-        for entity_type in metadata.entity_types() {
-            assert!(metadata.has_entity_type(&entity_type));
+        let entity_types = metadata.entity_types();
+        for entity_type in &entity_types {
+            assert!(metadata.has_entity_type(entity_type));
+        }
+        // And every extension member whose value is a JSON object is listed.
+        for (identifier, metadata_of_type) in &metadata.extensions {
+            if metadata_of_type.is_object() {
+                assert!(entity_types.contains(&EntityType::Other(identifier.clone())));
+            }
         }
         roundtrip(&metadata);
     }

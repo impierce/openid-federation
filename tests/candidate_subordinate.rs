@@ -217,6 +217,34 @@ async fn candidate_without_the_superior_in_authority_hints_is_reported() {
 }
 
 #[tokio::test]
+async fn candidate_with_a_critical_claim_passes_only_when_the_client_understands_it() {
+    let candidate = entity("https://op.example.org");
+    let mut configuration = configuration(&candidate, vec![superior_id()], false);
+    configuration.crit = Some(vec!["x".to_string()]);
+    configuration.claims.additional.insert("x".to_string(), json!(1));
+    let jwt = configuration.sign(&candidate_signer()).await.unwrap();
+    let (client, _server) = client_serving_jwt(jwt).await;
+
+    let report = client
+        .check_candidate_subordinate(&superior_id(), &candidate, &SubordinatePolicy::new())
+        .await;
+    assert!(
+        matches!(
+            report.failures.as_slice(),
+            [CandidateFailure::InvalidConfiguration(error)] if error.to_string().contains("not understood")
+        ),
+        "{:?}",
+        report.failures
+    );
+
+    let report = client
+        .with_understood_claims(["x"])
+        .check_candidate_subordinate(&superior_id(), &candidate, &SubordinatePolicy::new())
+        .await;
+    assert!(report.passed(), "{:?}", report.failures);
+}
+
+#[tokio::test]
 async fn candidate_with_a_bad_self_signature_is_reported() {
     let candidate = entity("https://op.example.org");
     // Signed under the published `kid`, but with another key than the one `jwks` publishes.
@@ -387,5 +415,6 @@ fn entity_types_follow_the_metadata_members() {
     );
     assert!(!metadata.has_entity_type(&EntityType::Other("null_custom".to_string())));
     assert!(metadata.has_entity_type(&EntityType::Other("aa_custom".to_string())));
+    assert!(!metadata.has_entity_type(&EntityType::Other("string_custom".to_string())));
     assert!(EntityMetadata::new().entity_types().is_empty());
 }
