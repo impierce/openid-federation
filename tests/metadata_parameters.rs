@@ -106,15 +106,20 @@ fn authorization_server_keeps_parameters_it_has_no_field_for() {
 /// kept in `additional`.
 #[test]
 fn a_defined_parameter_with_the_wrong_type_still_fails() {
-    for (json, name) in [
-        (
-            json!({ "issuer": "https://op.example.org", "logo_uri": 42 }),
-            "logo_uri",
-        ),
-        (json!({ "issuer": "not a URL" }), "issuer"),
-    ] {
-        let error = serde_json::from_value::<OpenIdConnectProviderMetadata>(json.clone()).unwrap_err();
-        assert!(!error.to_string().is_empty(), "{name}: {json}");
+    // Every required OP parameter present, so a failure comes from the parameter under test.
+    let op = json!({
+        "issuer": "https://op.example.org",
+        "authorization_endpoint": "https://op.example.org/authorize",
+        "response_types_supported": ["code"],
+        "subject_types_supported": ["pairwise"],
+        "id_token_signing_alg_values_supported": ["ES256"]
+    });
+    serde_json::from_value::<OpenIdConnectProviderMetadata>(op.clone()).unwrap();
+    for (name, value) in [("logo_uri", json!(42)), ("issuer", json!("not a URL"))] {
+        let mut json = op.clone();
+        json[name] = value;
+        let error = serde_json::from_value::<OpenIdConnectProviderMetadata>(json.clone());
+        assert!(error.is_err(), "{name}: {json}");
     }
     let error = serde_json::from_value::<OpenIdConnectRelyingPartyMetadata>(
         json!({ "redirect_uris": ["https://rp.example.org/callback"], "response_types": "code" }),
