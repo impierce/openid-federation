@@ -41,6 +41,7 @@ openid-federation/
 │   │   └── trust_mark.rs  # TrustMarkEndpoint (Section 8.6)
 │   ├── store.rs         # Subordinate, SubordinateStore, InMemorySubordinateStore; IssuedTrustMark, TrustMarkStore, InMemoryTrustMarkStore
 │   ├── onboarding.rs    # FederationClient::check_candidate_subordinate, SubordinatePolicy, CandidateReport (Appendix A.1)
+│   ├── policy.rs        # resolve_metadata_policy: the metadata policies of a Trust Chain merged into one (Section 6.1.4.1)
 │   ├── keys.rs          # FederationKeys across rollover (Section 11.2), KeyStore, InMemoryKeyStore
 │   └── error.rs         # FederationError, EndpointError, FederationResult
 ├── fuzz/                # cargo-fuzz targets; a workspace of its own

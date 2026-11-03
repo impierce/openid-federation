@@ -997,7 +997,7 @@ pub fn validate_metadata_policy(policy: &MetadataPolicy, critical_operators: &[S
     Ok(())
 }
 
-fn policy_error(message: String) -> FederationError {
+pub(crate) fn policy_error(message: String) -> FederationError {
     FederationError::InvalidMetadata(format!("metadata policy error: {message}"))
 }
 
