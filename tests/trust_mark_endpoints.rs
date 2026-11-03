@@ -51,11 +51,13 @@ struct Issued {
     expired: String,
     revoked: String,
     future: String,
+    soon: String,
 }
 
 /// SIRTFI Trust Marks: two active ones for the OP, one without `exp` for the RP spelled with a
-/// trailing slash, an expired one, a revoked one, and two issued an hour from now, one for the OP
-/// and one for an entity that holds no other; and an active Trust Mark of another type for the OP.
+/// trailing slash, an expired one, a revoked one, two issued an hour from now, one for the OP and
+/// one for an entity that holds no other, and one issued 30 seconds from now, within the clock
+/// skew allowed; and an active Trust Mark of another type for the OP.
 async fn issued() -> Issued {
     let store = Arc::new(InMemoryTrustMarkStore::new());
     let issued = Issued {
@@ -66,6 +68,7 @@ async fn issued() -> Issued {
         expired: sign_trust_mark("https://old.example.org", SIRTFI, now() - 7200, Some(now() - 60)).await,
         revoked: sign_trust_mark("https://revoked.example.org", SIRTFI, now() - 7200, None).await,
         future: sign_trust_mark("https://future.example.org", SIRTFI, now() + 3600, None).await,
+        soon: sign_trust_mark("https://soon.example.org", SIRTFI, now() + 30, None).await,
         store,
     };
     // Issued later than the OP's others, so it would be served first if it counted as active.
@@ -79,6 +82,7 @@ async fn issued() -> Issued {
         &issued.expired,
         &issued.revoked,
         &issued.future,
+        &issued.soon,
     ] {
         issued.store.insert(IssuedTrustMark::from_jwt(jwt.as_str()).unwrap());
     }
@@ -144,7 +148,11 @@ async fn listing_names_each_subject_of_an_active_trust_mark_of_the_type_once() {
     // The OP holds two, spelled two ways, and is listed once, under the spelling sorted first.
     assert_eq!(
         listed(&endpoint, &query(SIRTFI, None)).await,
-        ["https://op.example.org", "https://rp.example.org/"]
+        [
+            "https://op.example.org",
+            "https://rp.example.org/",
+            "https://soon.example.org"
+        ]
     );
     assert_eq!(listed(&endpoint, &query(OTHER, None)).await, ["https://op.example.org"]);
     assert!(listed(&endpoint, &query("https://refeds.org/never-issued", None))
@@ -187,6 +195,7 @@ async fn trust_mark_endpoint_serves_the_latest_active_trust_mark() {
         (SIRTFI, "https://op.example.org/", &issued.op_renewed),
         (OTHER, "https://op.example.org", &issued.op_other),
         (SIRTFI, "https://rp.example.org", &issued.rp),
+        (SIRTFI, "https://soon.example.org", &issued.soon),
     ] {
         let response = endpoint
             .handle(&EndpointRequest::get(&query(trust_mark_type, Some(sub))))

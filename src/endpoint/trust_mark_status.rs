@@ -22,7 +22,7 @@ use std::sync::Arc;
 ///
 /// | Request                                                       | Response                                                   |
 /// | ------------------------------------------------------------- | ---------------------------------------------------------- |
-/// | a Trust Mark in the store                                      | `200`, status `revoked`, `expired` from its `exp` on, `invalid` while its `iat` is in the future, or `active` |
+/// | a Trust Mark in the store                                      | `200`, status `revoked`, `expired` from its `exp` on, `invalid` while its `iat` is more than 60 seconds ahead, or `active` |
 /// | a Trust Mark by this issuer whose type and subject the store holds, but not this JWT | `200`, status `invalid`: not a Trust Mark the issuer recorded |
 /// | any other Trust Mark JWT                                       | `404 not_found`                                            |
 /// | not a `POST`; `trust_mark` missing, repeated or not a `trust-mark+jwt` | `400 invalid_request`                              |

@@ -24,11 +24,12 @@ use std::sync::Arc;
 /// | `trust_mark_type` or `sub` missing or repeated; `sub` not an Entity Identifier | `400 invalid_request`                 |
 /// | the store fails                                          | `500 server_error`                                          |
 ///
-/// A Trust Mark is active while it is neither revoked nor expired and its `iat` is not in the
-/// future, see [`IssuedTrustMark::status_at`](crate::IssuedTrustMark::status_at). When the
-/// subject holds several active Trust Marks of the type, the endpoint serves the one issued last,
-/// by `iat`. The records the store returns are checked against the request, so a store that
-/// answers too broadly does not hand out the Trust Mark of another entity or type.
+/// A Trust Mark is active while it is neither revoked nor expired and its `iat` is at most 60
+/// seconds ahead, the clock skew allowed, see
+/// [`IssuedTrustMark::status_at`](crate::IssuedTrustMark::status_at). When the subject holds
+/// several active Trust Marks of the type, the endpoint serves the one issued last, by `iat`. The
+/// records the store returns are checked against the request, so a store that answers too broadly
+/// does not hand out the Trust Mark of another entity or type.
 ///
 /// Reference: OpenID Federation 1.0 - Section 8.6 Trust Mark Endpoint
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.6>)
