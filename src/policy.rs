@@ -130,7 +130,7 @@ fn merge_operators(current: &mut PolicyOperators, next: &PolicyOperators) -> Fed
     match (&mut current.one_of, &next.one_of) {
         (Some(one_of), Some(next_one_of)) => {
             let superior = one_of.clone();
-            one_of.retain(|value| next_one_of.contains(value));
+            intersection(one_of, next_one_of);
             if one_of.is_empty() {
                 return Err(policy_error(format!(
                     "one_of {} has no value in common with one_of {} of a Superior",
@@ -144,7 +144,7 @@ fn merge_operators(current: &mut PolicyOperators, next: &PolicyOperators) -> Fed
     }
 
     match (&mut current.subset_of, &next.subset_of) {
-        (Some(subset_of), Some(next_subset_of)) => subset_of.retain(|value| next_subset_of.contains(value)),
+        (Some(subset_of), Some(next_subset_of)) => intersection(subset_of, next_subset_of),
         (None, Some(next_subset_of)) => current.subset_of = Some(next_subset_of.clone()),
         (_, None) => {}
     }
@@ -185,13 +185,27 @@ fn into_array(value: Value) -> Vec<Value> {
     }
 }
 
-/// Appends the elements of `next` that `values` lacks, keeping the order of both.
+/// Sets `values` to the union of `values` and `next`: each value once, in the order it first
+/// appears in `values`, then in `next`.
 fn union(values: &mut Vec<Value>, next: &[Value]) {
-    for value in next {
-        if !values.contains(value) {
-            values.push(value.clone());
+    *values = distinct(values.iter().chain(next));
+}
+
+/// Sets `values` to the intersection of `values` and `next`: each value once, in its order in
+/// `values`.
+fn intersection(values: &mut Vec<Value>, next: &[Value]) {
+    *values = distinct(values.iter().filter(|value| next.contains(value)));
+}
+
+/// The values in order, each kept the first time it appears.
+fn distinct<'a>(values: impl Iterator<Item = &'a Value>) -> Vec<Value> {
+    let mut distinct: Vec<Value> = Vec::new();
+    for value in values {
+        if !distinct.contains(value) {
+            distinct.push(value.clone());
         }
     }
+    distinct
 }
 
 /// Names the entity that issued the policy in a policy error.

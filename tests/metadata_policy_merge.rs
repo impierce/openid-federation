@@ -211,6 +211,33 @@ fn superset_of_merges_by_union() {
     );
 }
 
+/// Sections 6.1.3.1.2 and 6.1.3.1.4 to 6.1.3.1.6: a merged union or intersection holds each
+/// value once, even when a policy repeats one.
+#[test]
+fn merged_values_are_distinct() {
+    for (operator, superior, intermediate, result) in [
+        (
+            "add",
+            json!(["a", "a", "b"]),
+            json!(["b", "c", "c"]),
+            json!(["a", "b", "c"]),
+        ),
+        ("superset_of", json!(["a", "a"]), json!(["b", "a"]), json!(["a", "b"])),
+        ("subset_of", json!(["a", "b", "a"]), json!(["a", "c"]), json!(["a"])),
+        ("one_of", json!(["a", "a", "b"]), json!(["a"]), json!(["a"])),
+    ] {
+        assert_eq!(
+            merged(
+                "response_types",
+                json!({ operator: superior }),
+                json!({ operator: intermediate })
+            ),
+            json!({ operator: result }),
+            "{operator}"
+        );
+    }
+}
+
 /// Section 6.1.3.1.7: two `essential` operators merge to their logical OR, so an Intermediate
 /// cannot make a parameter the Trust Anchor requires voluntary.
 #[test]
