@@ -22,6 +22,7 @@ pub mod jwk;
 pub mod jwt;
 pub mod keys;
 pub mod metadata;
+pub mod onboarding;
 pub mod store;
 pub mod trust_chain;
 pub mod types;
@@ -34,6 +35,7 @@ pub use jwk::{HistoricalKey, HistoricalKeys, Jwk, JwkSet, KeyRevocation, Revocat
 pub use jwt::*;
 pub use keys::*;
 pub use metadata::*;
+pub use onboarding::*;
 pub use store::*;
 pub use trust_chain::*;
 pub use types::*;

@@ -511,7 +511,36 @@ impl EntityMetadata {
         }
     }
 
-    /// Check if the metadata contains information for a specific entity type.
+    /// The Entity Types this metadata has a member for, the standard ones first, in the order of
+    /// Section 5.1, then the others by name. A member whose value is not a JSON object is not
+    /// metadata of an Entity Type and is left out.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 5.1 Entity Type Identifiers
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-5.1>
+    pub fn entity_types(&self) -> Vec<EntityType> {
+        let mut others: Vec<&String> = self
+            .extensions
+            .iter()
+            .filter(|(_, metadata)| metadata.is_object())
+            .map(|(name, _)| name)
+            .collect();
+        others.sort();
+        [
+            EntityType::FederationEntity,
+            EntityType::OpenIdRelyingParty,
+            EntityType::OpenIdProvider,
+            EntityType::OauthAuthorizationServer,
+            EntityType::OauthClient,
+            EntityType::OauthResource,
+        ]
+        .into_iter()
+        .filter(|entity_type| self.has_entity_type(entity_type))
+        .chain(others.into_iter().map(|name| EntityType::Other(name.clone())))
+        .collect()
+    }
+
+    /// Check if the metadata contains information for a specific entity type: a member named
+    /// after it, with a JSON object as its value for an Entity Type defined elsewhere.
     pub fn has_entity_type(&self, entity_type: &EntityType) -> bool {
         match entity_type {
             EntityType::FederationEntity => self.federation_entity.is_some(),
@@ -520,7 +549,11 @@ impl EntityMetadata {
             EntityType::OauthAuthorizationServer => self.oauth_authorization_server.is_some(),
             EntityType::OauthResource => self.oauth_resource.is_some(),
             EntityType::OauthClient => self.oauth_client.is_some(),
-            EntityType::Other(identifier) => self.extensions.contains_key(identifier),
+            // The metadata of an Entity Type is a JSON object (Section 5).
+            EntityType::Other(identifier) => self
+                .extensions
+                .get(identifier)
+                .is_some_and(serde_json::Value::is_object),
         }
     }
 }

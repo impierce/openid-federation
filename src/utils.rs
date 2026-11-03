@@ -252,7 +252,7 @@ impl FederationClient {
     }
 
     /// [`with_understood_claims`](Self::with_understood_claims) as the slice the verifiers take.
-    fn understood_claims(&self) -> Vec<&str> {
+    pub(crate) fn understood_claims(&self) -> Vec<&str> {
         self.understood_claims.iter().map(String::as_str).collect()
     }
 
