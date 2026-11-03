@@ -146,13 +146,19 @@ jobs:
           persist-credentials: false
           # `baseline-rev` builds the base commit from the local history.
           fetch-depth: 0
+      # The checkout is GitHub's merge of the pull request into its base, so its first parent is
+      # the base as merged. `pull_request.base.sha` can be older: it does not move when the base
+      # does, and a breaking change merged to the base since would count as this pull request's.
+      - id: base
+        if: steps.title.outputs.breaking != 'true'
+        run: echo "sha=$(git rev-parse HEAD^1)" >> "$GITHUB_OUTPUT"
       - id: check
         if: steps.title.outputs.breaking != 'true'
         uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
         with:
           package: openid-federation
           feature-group: all-features
-          baseline-rev: ${{ github.event.pull_request.base.sha }}
+          baseline-rev: ${{ steps.base.outputs.sha }}
       - if: failure() && steps.check.outcome == 'failure'
         run: echo "::error::If cargo-semver-checks reports a breaking change (see the step above), mark the title as breaking (\`feat!:\`, \`fix!:\`, ...), then re-run this job."
 
