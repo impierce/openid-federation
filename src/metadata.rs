@@ -34,6 +34,109 @@ const FEDERATION_ENTITY_PARAMETERS: [&str; 24] = [
     "federation_historical_keys_endpoint_auth_methods",
 ];
 
+/// The parameters `OpenIdConnectProviderMetadata` has a field for. `additional` must not repeat them.
+const OPENID_PROVIDER_PARAMETERS: [&str; 39] = [
+    "issuer",
+    "authorization_endpoint",
+    "token_endpoint",
+    "userinfo_endpoint",
+    "jwks_uri",
+    "registration_endpoint",
+    "scopes_supported",
+    "response_types_supported",
+    "response_modes_supported",
+    "grant_types_supported",
+    "acr_values_supported",
+    "subject_types_supported",
+    "id_token_signing_alg_values_supported",
+    "id_token_encryption_alg_values_supported",
+    "id_token_encryption_enc_values_supported",
+    "userinfo_signing_alg_values_supported",
+    "userinfo_encryption_alg_values_supported",
+    "userinfo_encryption_enc_values_supported",
+    "request_object_signing_alg_values_supported",
+    "request_object_encryption_alg_values_supported",
+    "request_object_encryption_enc_values_supported",
+    "token_endpoint_auth_methods_supported",
+    "token_endpoint_auth_signing_alg_values_supported",
+    "display_values_supported",
+    "claim_types_supported",
+    "claims_supported",
+    "service_documentation",
+    "claims_locales_supported",
+    "ui_locales_supported",
+    "claims_parameter_supported",
+    "request_parameter_supported",
+    "request_uri_parameter_supported",
+    "require_request_uri_registration",
+    "op_policy_uri",
+    "op_tos_uri",
+    "signed_jwks_uri",
+    "client_registration_types_supported",
+    "federation_registration_endpoint",
+    "logo_uri",
+];
+
+/// The parameters `OpenIdConnectRelyingPartyMetadata` has a field for. `additional` must not repeat them.
+const OPENID_RELYING_PARTY_PARAMETERS: [&str; 30] = [
+    "redirect_uris",
+    "response_types",
+    "grant_types",
+    "application_type",
+    "contacts",
+    "client_name",
+    "logo_uri",
+    "client_uri",
+    "policy_uri",
+    "tos_uri",
+    "jwks_uri",
+    "jwks",
+    "sector_identifier_uri",
+    "subject_type",
+    "id_token_signed_response_alg",
+    "id_token_encrypted_response_alg",
+    "id_token_encrypted_response_enc",
+    "userinfo_signed_response_alg",
+    "userinfo_encrypted_response_alg",
+    "userinfo_encrypted_response_enc",
+    "request_object_signing_alg",
+    "request_object_encryption_alg",
+    "request_object_encryption_enc",
+    "token_endpoint_auth_method",
+    "token_endpoint_auth_signing_alg",
+    "default_max_age",
+    "require_auth_time",
+    "default_acr_values",
+    "initiate_login_uri",
+    "request_uris",
+];
+
+/// The parameters `OauthAuthorizationServerMetadata` has a field for. `additional` must not repeat them.
+const OAUTH_AUTHORIZATION_SERVER_PARAMETERS: [&str; 22] = [
+    "issuer",
+    "authorization_endpoint",
+    "token_endpoint",
+    "jwks_uri",
+    "registration_endpoint",
+    "scopes_supported",
+    "response_types_supported",
+    "response_modes_supported",
+    "grant_types_supported",
+    "token_endpoint_auth_methods_supported",
+    "token_endpoint_auth_signing_alg_values_supported",
+    "service_documentation",
+    "ui_locales_supported",
+    "op_policy_uri",
+    "op_tos_uri",
+    "revocation_endpoint",
+    "revocation_endpoint_auth_methods_supported",
+    "revocation_endpoint_auth_signing_alg_values_supported",
+    "introspection_endpoint",
+    "introspection_endpoint_auth_methods_supported",
+    "introspection_endpoint_auth_signing_alg_values_supported",
+    "code_challenge_methods_supported",
+];
+
 /// Federation entity metadata as defined in the OpenID Federation specification.
 ///
 /// Reference: OpenID Federation 1.0 - Section 5.1.1 Federation Entity
@@ -309,6 +412,22 @@ pub struct OpenIdConnectProviderMetadata {
     pub additional: HashMap<String, serde_json::Value>,
 }
 
+impl OpenIdConnectProviderMetadata {
+    /// Checks that [`additional`](Self::additional) repeats no parameter this struct has a field
+    /// for. Deserialization never puts one there; code can, and the serialized metadata would
+    /// then carry the parameter twice.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidMetadata`] naming the parameter.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 5.1.3
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1.3>)
+    pub fn validate(&self) -> FederationResult<()> {
+        reject_typed_parameters_in_additional("openid_provider", &OPENID_PROVIDER_PARAMETERS, &self.additional)
+    }
+}
+
 /// OpenID Connect Relying Party metadata.
 ///
 /// Reference: OpenID Federation 1.0 - Section 5.3 Relying Party Metadata
@@ -411,6 +530,26 @@ pub struct OpenIdConnectRelyingPartyMetadata {
     pub additional: HashMap<String, serde_json::Value>,
 }
 
+impl OpenIdConnectRelyingPartyMetadata {
+    /// Checks that [`additional`](Self::additional) repeats no parameter this struct has a field
+    /// for. Deserialization never puts one there; code can, and the serialized metadata would
+    /// then carry the parameter twice.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidMetadata`] naming the parameter.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 5.1.2
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1.2>)
+    pub fn validate(&self) -> FederationResult<()> {
+        reject_typed_parameters_in_additional(
+            "openid_relying_party",
+            &OPENID_RELYING_PARTY_PARAMETERS,
+            &self.additional,
+        )
+    }
+}
+
 /// OAuth Authorization Server metadata.
 ///
 /// Reference: OpenID Federation 1.0 - Section 5.4 OAuth Authorization Server Metadata
@@ -488,6 +627,42 @@ pub struct OauthAuthorizationServerMetadata {
     /// that they survive a round trip and a metadata policy can apply to them.
     #[serde(flatten)]
     pub additional: HashMap<String, serde_json::Value>,
+}
+
+impl OauthAuthorizationServerMetadata {
+    /// Checks that [`additional`](Self::additional) repeats no parameter this struct has a field
+    /// for. Deserialization never puts one there; code can, and the serialized metadata would
+    /// then carry the parameter twice.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidMetadata`] naming the parameter.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 5.1.4
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1.4>)
+    pub fn validate(&self) -> FederationResult<()> {
+        reject_typed_parameters_in_additional(
+            "oauth_authorization_server",
+            &OAUTH_AUTHORIZATION_SERVER_PARAMETERS,
+            &self.additional,
+        )
+    }
+}
+
+/// Refuses an `additional` map that repeats a parameter its struct has a field for: serialized,
+/// the metadata would carry the parameter twice, which a JSON object must not (RFC 8259) and which
+/// this crate refuses when it reads a statement.
+fn reject_typed_parameters_in_additional(
+    entity_type: &str,
+    typed: &[&str],
+    additional: &HashMap<String, serde_json::Value>,
+) -> FederationResult<()> {
+    match additional.keys().find(|name| typed.contains(&name.as_str())) {
+        Some(name) => Err(FederationError::InvalidMetadata(format!(
+            "{name} is a typed {entity_type} parameter and must not appear in additional"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Comprehensive metadata structure that can contain metadata for any entity type.
@@ -800,5 +975,92 @@ mod federation_entity_tests {
             ..Default::default()
         };
         assert!(metadata.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod typed_parameter_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The smallest metadata of each typed Entity Type, with every required parameter.
+    fn minimal(entity_type: &str) -> serde_json::Value {
+        match entity_type {
+            "openid_provider" => json!({
+                "issuer": "https://op.example.org",
+                "authorization_endpoint": "https://op.example.org/authorize",
+                "response_types_supported": ["code"],
+                "subject_types_supported": ["public"],
+                "id_token_signing_alg_values_supported": ["ES256"]
+            }),
+            "openid_relying_party" => json!({ "redirect_uris": ["https://rp.example.org/callback"] }),
+            "oauth_authorization_server" => json!({ "issuer": "https://as.example.org" }),
+            other => panic!("{other}"),
+        }
+    }
+
+    fn parse<T: serde::de::DeserializeOwned>(
+        entity_type: &str,
+        name: &str,
+        value: serde_json::Value,
+    ) -> Result<T, serde_json::Error> {
+        let mut json = minimal(entity_type);
+        json[name] = value;
+        serde_json::from_value(json)
+    }
+
+    #[test]
+    fn every_listed_parameter_is_a_field() {
+        // A JSON object fits none of the typed fields, so a listed name that is a field fails to
+        // parse; a name that is not a field would land in `additional`.
+        let probe = json!({ "probe": true });
+        for name in OPENID_PROVIDER_PARAMETERS {
+            assert!(
+                parse::<OpenIdConnectProviderMetadata>("openid_provider", name, probe.clone()).is_err(),
+                "{name}"
+            );
+        }
+        for name in OPENID_RELYING_PARTY_PARAMETERS {
+            assert!(
+                parse::<OpenIdConnectRelyingPartyMetadata>("openid_relying_party", name, probe.clone()).is_err(),
+                "{name}"
+            );
+        }
+        for name in OAUTH_AUTHORIZATION_SERVER_PARAMETERS {
+            assert!(
+                parse::<OauthAuthorizationServerMetadata>("oauth_authorization_server", name, probe.clone()).is_err(),
+                "{name}"
+            );
+        }
+        let kept: OpenIdConnectProviderMetadata = parse("openid_provider", "organization_name", probe.clone()).unwrap();
+        assert_eq!(kept.additional.get("organization_name"), Some(&probe));
+    }
+
+    #[test]
+    fn typed_parameter_in_additional_fails() {
+        // Deserialization never puts a typed parameter into `additional`; code can.
+        let mut op: OpenIdConnectProviderMetadata = serde_json::from_value(minimal("openid_provider")).unwrap();
+        op.validate().unwrap();
+        op.additional
+            .insert("issuer".to_string(), json!("https://other.example.org"));
+        assert!(op
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("issuer is a typed openid_provider parameter"));
+
+        let mut rp: OpenIdConnectRelyingPartyMetadata =
+            serde_json::from_value(minimal("openid_relying_party")).unwrap();
+        rp.additional.insert("scope".to_string(), json!("openid"));
+        rp.validate().unwrap();
+        rp.additional.insert("redirect_uris".to_string(), json!([]));
+        assert!(rp.validate().unwrap_err().to_string().contains("redirect_uris"));
+
+        let mut server: OauthAuthorizationServerMetadata =
+            serde_json::from_value(minimal("oauth_authorization_server")).unwrap();
+        server
+            .additional
+            .insert("token_endpoint".to_string(), json!("https://as.example.org/token"));
+        assert!(server.validate().unwrap_err().to_string().contains("token_endpoint"));
     }
 }

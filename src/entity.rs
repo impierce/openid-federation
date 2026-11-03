@@ -225,7 +225,7 @@ impl SubordinateStatement {
         self.validate()?;
         self.validate_for_issuing()?;
         validate_entity_ids_for_signing(&self.claims)?;
-        validate_federation_entity_for_signing(self.metadata.as_ref())?;
+        validate_metadata_for_signing(self.metadata.as_ref())?;
         self.jwks.validate()?;
         sign_federation_jwt(self, JwtArtifactType::EntityStatement, signer).await
     }
@@ -590,19 +590,33 @@ impl SubordinateStatementBuilder {
     }
 }
 
-/// Checks the `federation_entity` metadata of a statement this crate is about to sign with
-/// [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate): `https`
-/// federation endpoints without a fragment, and no `none` in
-/// `endpoint_auth_signing_alg_values_supported`. Like the Entity Identifier check, it runs when
-/// signing only.
+/// Checks the metadata of a statement this crate is about to sign. `federation_entity` goes
+/// through [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate):
+/// `https` federation endpoints without a fragment, and no `none` in
+/// `endpoint_auth_signing_alg_values_supported`. The typed `openid_provider`,
+/// `openid_relying_party` and `oauth_authorization_server` metadata go through their own
+/// `validate`: no `additional` member repeats a typed parameter, which would appear twice in the
+/// signed JSON. Like the Entity Identifier check, it runs when signing only.
 ///
-/// Reference: OpenID Federation 1.0 - Section 5.1.1 Federation Entity
-/// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1.1>)
-fn validate_federation_entity_for_signing(metadata: Option<&EntityMetadata>) -> FederationResult<()> {
-    match metadata.and_then(|metadata| metadata.federation_entity.as_ref()) {
-        Some(federation_entity) => federation_entity.validate(),
-        None => Ok(()),
+/// Reference: OpenID Federation 1.0 - Sections 5.1.1 to 5.1.4
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1>)
+fn validate_metadata_for_signing(metadata: Option<&EntityMetadata>) -> FederationResult<()> {
+    let Some(metadata) = metadata else {
+        return Ok(());
+    };
+    if let Some(federation_entity) = &metadata.federation_entity {
+        federation_entity.validate()?;
     }
+    if let Some(openid_provider) = &metadata.openid_provider {
+        openid_provider.validate()?;
+    }
+    if let Some(openid_relying_party) = &metadata.openid_relying_party {
+        openid_relying_party.validate()?;
+    }
+    if let Some(oauth_authorization_server) = &metadata.oauth_authorization_server {
+        oauth_authorization_server.validate()?;
+    }
+    Ok(())
 }
 
 /// Checks `iss` and `sub` of a statement this crate is about to sign: each Entity Identifier uses
@@ -899,7 +913,7 @@ impl EntityConfiguration {
                 validate_entity_id_for_signing(claim, entity_id)?;
             }
         }
-        validate_federation_entity_for_signing(self.metadata.as_ref())?;
+        validate_metadata_for_signing(self.metadata.as_ref())?;
         self.jwks.validate()?;
         if !self
             .jwks

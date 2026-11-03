@@ -2,8 +2,11 @@
 //! Sections 5.1.2 to 5.1.4 and 5.2): they are kept in `additional` and survive a round trip, and
 //! a parameter a struct does define keeps its type.
 
+use jsonwebtoken::Algorithm;
 use openid_federation::{
-    EntityMetadata, OauthAuthorizationServerMetadata, OpenIdConnectProviderMetadata, OpenIdConnectRelyingPartyMetadata,
+    EntityConfiguration, EntityId, EntityMetadata, FederationError, InMemorySigner, Jwk, JwkSet,
+    OauthAuthorizationServerMetadata, OpenIdConnectProviderMetadata, OpenIdConnectRelyingPartyMetadata,
+    SubordinateStatement,
 };
 use serde_json::{json, Value};
 
@@ -119,4 +122,51 @@ fn a_defined_parameter_with_the_wrong_type_still_fails() {
     assert!(error.is_err(), "response_types must be an array: {error:?}");
     let error = serde_json::from_value::<OpenIdConnectRelyingPartyMetadata>(json!({ "scope": "openid" }));
     assert!(error.is_err(), "redirect_uris stays required: {error:?}");
+}
+
+const ED25519_DER: &[u8] = include_bytes!("data/signer/ed25519.pkcs8.der");
+const ED25519_JWK: &str = include_str!("data/signer/ed25519.public.jwk.json");
+
+/// Signing refuses metadata whose `additional` repeats a typed parameter: the signed JSON would
+/// carry the parameter twice, and this crate refuses such a statement when it reads one.
+#[tokio::test]
+async fn signing_refuses_a_typed_parameter_in_additional() {
+    let signer = InMemorySigner::from_der(Algorithm::EdDSA, "op-key", ED25519_DER).unwrap();
+    let mut key: Jwk = serde_json::from_str(ED25519_JWK).unwrap();
+    key.kid = Some("op-key".to_string());
+    let mut jwks = JwkSet::new();
+    jwks.add_key(key);
+    let now = chrono::Utc::now().timestamp();
+    let op = EntityId::parse("https://op.umu.se").unwrap();
+
+    let mut metadata: EntityMetadata = serde_json::from_value(json!({ "openid_provider": figure_69() })).unwrap();
+    let mut configuration = EntityConfiguration::new(op.clone(), jwks.clone(), now + 3600, now);
+    configuration.metadata = Some(metadata.clone());
+    configuration.sign(&signer).await.unwrap();
+
+    metadata
+        .openid_provider
+        .as_mut()
+        .unwrap()
+        .additional
+        .insert("issuer".to_string(), json!("https://other.example.org"));
+    configuration.metadata = Some(metadata.clone());
+    let error = configuration.sign(&signer).await.unwrap_err();
+    assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("issuer is a typed openid_provider parameter"),
+        "{error}"
+    );
+
+    let statement = SubordinateStatement::new(EntityId::parse("https://umu.se").unwrap(), op, now + 3600, now, jwks)
+        .with_metadata(metadata);
+    let error = statement.sign(&signer).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("issuer is a typed openid_provider parameter"),
+        "{error}"
+    );
 }
