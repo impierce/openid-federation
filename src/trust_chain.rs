@@ -25,7 +25,9 @@ pub struct TrustChain {
     /// Metadata obtained from the trust chain resolution
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<crate::EntityMetadata>,
-    /// Trust marks obtained from the trust chain
+    /// The leaf's Trust Marks that verified under the chain's Trust Anchor, filled by
+    /// [`FederationClient::verify_chain_trust_marks`](crate::FederationClient::verify_chain_trust_marks).
+    /// `None` until then, since discovery does not verify Trust Marks by itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_marks: Option<Vec<crate::TrustMark>>,
 }

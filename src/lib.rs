@@ -25,6 +25,7 @@ pub mod metadata;
 pub mod onboarding;
 pub mod store;
 pub mod trust_chain;
+pub mod trust_marks;
 pub mod types;
 pub mod utils;
 
@@ -38,6 +39,7 @@ pub use metadata::*;
 pub use onboarding::*;
 pub use store::*;
 pub use trust_chain::*;
+pub use trust_marks::*;
 pub use types::*;
 pub use utils::*;
 
