@@ -250,8 +250,11 @@ fn issued_by(issuer: &EntityId, error: FederationError) -> FederationError {
 /// # Errors
 ///
 /// [`FederationError::InvalidMetadata`] naming the Entity Type, the metadata parameter and the
-/// operator that fails, or saying that the Resolved Metadata no longer fits its Entity Type, such
-/// as a required parameter removed. Such metadata MUST NOT be used (Section 6.1.4.2).
+/// operator that fails, a parameter policy that does not pass [`PolicyOperators::validate`], a
+/// `scope` that is no longer a list of strings, or an Entity Type whose Resolved Metadata no
+/// longer fits it: a required parameter removed, a value of the wrong type, or `federation_entity`
+/// metadata that fails [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate),
+/// such as an endpoint that is not `https`. Such metadata MUST NOT be used (Section 6.1.4.2).
 ///
 /// Reference: OpenID Federation 1.0 - Section 6.1.4.2 Application
 /// <https://openid.net/specs/openid-federation-1_0.html#section-6.1.4.2>
@@ -281,8 +284,30 @@ pub fn apply_metadata_policy(metadata: &EntityMetadata, policy: &MetadataPolicy)
         }
     }
 
-    serde_json::from_value(Value::Object(json))
-        .map_err(|error| policy_error(format!("the Resolved Metadata is not valid metadata: {error}")))
+    let resolved: EntityMetadata = serde_json::from_value(Value::Object(json.clone())).map_err(|error| {
+        // Name the Entity Type whose metadata no longer fits: deserialize each member alone.
+        let entity_type = json.iter().find_map(|(entity_type, metadata)| {
+            let mut member = Map::new();
+            member.insert(entity_type.clone(), metadata.clone());
+            serde_json::from_value::<EntityMetadata>(Value::Object(member))
+                .is_err()
+                .then_some(entity_type)
+        });
+        match entity_type {
+            Some(entity_type) => policy_error(format!(
+                "{entity_type}: the Resolved Metadata is not valid {entity_type} metadata: {error}"
+            )),
+            None => policy_error(format!("the Resolved Metadata is not valid metadata: {error}")),
+        }
+    })?;
+    if let Some(federation_entity) = &resolved.federation_entity {
+        federation_entity.validate().map_err(|error| {
+            policy_error(format!(
+                "federation_entity: the Resolved Metadata is not valid federation_entity metadata: {error}"
+            ))
+        })?;
+    }
+    Ok(resolved)
 }
 
 /// Applies the operators of one metadata parameter policy to the parameter `name` of
@@ -292,6 +317,8 @@ fn apply_operators(
     name: &str,
     operators: &PolicyOperators,
 ) -> FederationResult<()> {
+    // A resolved policy is valid already; a policy from elsewhere gets the same checks.
+    operators.validate()?;
     let scope = name == "scope";
     let as_processed = |value: Value| if scope { scope_values(value) } else { value };
     let mut parameter = parameters.remove(name).map(as_processed);
@@ -368,6 +395,11 @@ fn apply_operators(
 
     if let Some(parameter) = parameter {
         let parameter = if scope { scope_string(parameter) } else { parameter };
+        if scope && !parameter.is_string() {
+            return Err(policy_error(format!(
+                "scope: {parameter} is not a list of strings to write back as a space-separated string"
+            )));
+        }
         parameters.insert(name.to_string(), parameter);
     }
     Ok(())

@@ -347,7 +347,54 @@ fn illegal_resolved_metadata_fails() {
     )
     .unwrap_err();
     assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
-    assert!(error.to_string().contains("not valid metadata"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("openid_relying_party: the Resolved Metadata is not valid")
+            && error.to_string().contains("redirect_uris"),
+        "names the Entity Type and the parameter: {error}"
+    );
+
+    // A federation endpoint a policy sets to `http` fails `FederationEntityMetadata::validate`
+    // (Section 5.1.1).
+    let error = apply_metadata_policy(
+        &metadata(json!({ "federation_entity": { "organization_name": "TA" } })),
+        &policy(
+            json!({ "federation_entity": { "federation_fetch_endpoint": { "value": "http://ta.example.org/fetch" } } }),
+        ),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("federation_entity: the Resolved Metadata is not valid")
+            && error.contains("federation_fetch_endpoint"),
+        "{error}"
+    );
+}
+
+/// Section 6.1.3: a parameter policy that does not pass `PolicyOperators::validate`, here an
+/// `add` that is not an array, is a policy error rather than skipped.
+#[test]
+fn malformed_parameter_policy_fails() {
+    assert!(
+        policy_error(json!({}), "contacts", json!({ "add": "helpdesk@example.org" })).contains("add must be an array")
+    );
+    assert!(policy_error(
+        json!({ "contacts": ["a@example.org"] }),
+        "contacts",
+        json!({ "one_of": ["a"], "add": ["b"] })
+    )
+    .contains("one_of must not be combined with add"));
+}
+
+/// Section 6.1.3.1.8: `scope` is written back as a space-separated string, so values that are
+/// not strings are a policy error.
+#[test]
+fn scope_with_a_value_that_is_not_a_string_fails() {
+    assert!(
+        policy_error(json!({ "scope": "openid" }), "scope", json!({ "add": [42] }))
+            .contains("scope: [\"openid\",42] is not a list of strings")
+    );
 }
 
 /// Section 6.1.5: the merged policy of Figure 12, applied to the Leaf Entity's metadata of
