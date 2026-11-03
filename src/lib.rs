@@ -24,6 +24,7 @@ pub mod keys;
 pub mod metadata;
 pub mod store;
 pub mod trust_chain;
+pub mod trust_marks;
 pub mod types;
 pub mod utils;
 
@@ -36,6 +37,7 @@ pub use keys::*;
 pub use metadata::*;
 pub use store::*;
 pub use trust_chain::*;
+pub use trust_marks::*;
 pub use types::*;
 pub use utils::*;
 

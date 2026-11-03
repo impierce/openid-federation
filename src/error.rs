@@ -59,6 +59,11 @@ pub enum FederationError {
     #[error("Invalid JWT header 'typ' claim: {0}")]
     InvalidJwtHeaderTyp(String),
 
+    /// A Trust Mark failed verification at the step the [`TrustMarkRejection`](crate::TrustMarkRejection)
+    /// names, see [`TrustMark::from_verified_jwt`](crate::TrustMark::from_verified_jwt).
+    #[error("Trust Mark rejected: {0}")]
+    TrustMarkRejected(Box<crate::TrustMarkRejection>),
+
     /// A [`Signer`](crate::Signer) failed to sign
     #[error("Signing error: {0}")]
     Signing(#[from] SignError),
