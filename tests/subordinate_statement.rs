@@ -181,11 +181,14 @@ async fn built_statement_verifies_in_a_trust_chain() {
         .build()
         .unwrap();
 
-    let chain = TrustChain::try_new(vec![
-        leaf.sign(&leaf_signer).await.unwrap(),
-        statement.sign(&signer).await.unwrap(),
-        anchor.sign(&signer).await.unwrap(),
-    ])
+    let chain = TrustChain::try_new(
+        vec![
+            leaf.sign(&leaf_signer).await.unwrap(),
+            statement.sign(&signer).await.unwrap(),
+            anchor.sign(&signer).await.unwrap(),
+        ],
+        &[],
+    )
     .unwrap();
 
     let (id, _) = chain.trust_anchor_entity_id_and_configuration().unwrap();

@@ -100,7 +100,7 @@ async fn serves_an_entity_configuration_its_own_keys_verify() {
 
     assert_eq!(response.status, 200);
     assert_eq!(response.content_type, "application/entity-statement+jwt");
-    let served = EntityConfiguration::from_verified_jwt(&response.body, &entity_id()).unwrap();
+    let served = EntityConfiguration::from_verified_jwt(&response.body, &entity_id(), &[]).unwrap();
     let now = chrono::Utc::now().timestamp();
     assert!((now - 5..=now).contains(&served.claims.iat), "iat is the signing time");
     assert_eq!(served.claims.exp - served.claims.iat, Duration::hours(6).num_seconds());
@@ -137,7 +137,7 @@ async fn cached_configuration_is_re_signed_once_it_expires_within_the_refresh_ma
     wait_until(chrono::Utc::now().timestamp() + 1).await;
 
     let first = endpoint.handle().await;
-    let exp = EntityConfiguration::from_verified_jwt(&first.body, &entity_id())
+    let exp = EntityConfiguration::from_verified_jwt(&first.body, &entity_id(), &[])
         .unwrap()
         .claims
         .exp;
@@ -152,7 +152,7 @@ async fn cached_configuration_is_re_signed_once_it_expires_within_the_refresh_ma
     wait_until(exp - 1).await;
     let refreshed = endpoint.handle().await;
     assert_eq!(signer.calls(), 2, "not re-signed at exp - refresh_margin");
-    let refreshed = EntityConfiguration::from_verified_jwt(&refreshed.body, &entity_id()).unwrap();
+    let refreshed = EntityConfiguration::from_verified_jwt(&refreshed.body, &entity_id(), &[]).unwrap();
     assert!(refreshed.claims.exp > exp);
 }
 
@@ -167,7 +167,7 @@ async fn configuration_within_the_refresh_margin_of_exp_is_re_signed() {
     for expected_calls in 1..=3 {
         let response = endpoint.handle().await;
         assert_eq!(response.status, 200);
-        EntityConfiguration::from_verified_jwt(&response.body, &entity_id()).unwrap();
+        EntityConfiguration::from_verified_jwt(&response.body, &entity_id(), &[]).unwrap();
         assert_eq!(signer.calls(), expected_calls);
     }
 }

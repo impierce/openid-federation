@@ -140,11 +140,14 @@ async fn trust_anchor_configuration_verifies_in_a_trust_chain() {
     leaf.authority_hints = Some(vec![anchor_id()]);
     let about_leaf = SubordinateStatement::new(anchor_id(), leaf_id, now() + 3600, now(), jwks("op-key"));
 
-    let chain = TrustChain::try_new(vec![
-        leaf.sign(&leaf_signer).await.unwrap(),
-        about_leaf.sign(&signer).await.unwrap(),
-        anchor.sign(&signer).await.unwrap(),
-    ])
+    let chain = TrustChain::try_new(
+        vec![
+            leaf.sign(&leaf_signer).await.unwrap(),
+            about_leaf.sign(&signer).await.unwrap(),
+            anchor.sign(&signer).await.unwrap(),
+        ],
+        &[],
+    )
     .unwrap();
 
     let (id, configuration) = chain.trust_anchor_entity_id_and_configuration().unwrap();

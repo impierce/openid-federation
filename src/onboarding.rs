@@ -167,7 +167,8 @@ impl FederationClient {
     ///
     /// The candidate's Entity Configuration is fetched and verified with
     /// [`EntityConfiguration::from_verified_jwt`]: it must be the candidate's own and be signed
-    /// with a key from its own `jwks`. Then:
+    /// with a key from its own `jwks`, and its `crit` may name only claims the client was told it
+    /// understands ([`with_understood_claims`](Self::with_understood_claims)). Then:
     /// - `authority_hints` must name `superior`, or no Trust Chain from the candidate reaches it;
     /// - `jwks` must pass [`JwkSet::validate`](crate::JwkSet::validate), since the Superior publishes them in its
     ///   Subordinate Statement;
@@ -195,7 +196,7 @@ impl FederationClient {
                 failures.push(CandidateFailure::ConfigurationUnreachable(err));
                 None
             }
-            Ok(jwt) => match EntityConfiguration::from_verified_jwt(&jwt, candidate) {
+            Ok(jwt) => match EntityConfiguration::from_verified_jwt(&jwt, candidate, &self.understood_claims()) {
                 Err(err) => {
                     failures.push(CandidateFailure::InvalidConfiguration(err));
                     None

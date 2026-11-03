@@ -138,7 +138,7 @@ mod tests {
         config.validate().unwrap();
         let jwt = encode_entity_configuration(&config, &EncodingKey::from_secret(b"test_secret_key"));
         assert_eq!(
-            EntityConfiguration::from_verified_jwt(&jwt, &entity_id).unwrap(),
+            EntityConfiguration::from_verified_jwt(&jwt, &entity_id, &[]).unwrap(),
             config
         );
     }
@@ -158,7 +158,7 @@ mod tests {
         assert!(error.contains("trust-marks/member"), "{error}");
         assert!(error.contains("trust-marks/auditor"), "{error}");
         let jwt = encode_entity_configuration(&config, &EncodingKey::from_secret(b"test_secret_key"));
-        assert!(EntityConfiguration::from_verified_jwt(&jwt, &entity_id).is_err());
+        assert!(EntityConfiguration::from_verified_jwt(&jwt, &entity_id, &[]).is_err());
     }
 
     #[test]
@@ -250,7 +250,7 @@ mod tests {
         header.kid = Some("test-key-1".to_string());
         let jwt = encode(&header, &claims, &EncodingKey::from_secret(b"test_secret_key")).unwrap();
 
-        let config = EntityConfiguration::from_verified_jwt(&jwt, &entity_id).unwrap();
+        let config = EntityConfiguration::from_verified_jwt(&jwt, &entity_id, &[]).unwrap();
 
         assert_eq!(config.claims.iat, iat as i64);
     }
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_trust_chain_creation() {
-        let chain = TrustChain::try_new(vec!["jwt1".to_string(), "jwt2".to_string(), "jwt3".to_string()]);
+        let chain = TrustChain::try_new(vec!["jwt1".to_string(), "jwt2".to_string(), "jwt3".to_string()], &[]);
 
         assert!(chain.is_err());
     }
@@ -675,18 +675,24 @@ mod tests {
         );
 
         // Test 3: Build trust chains for both leaf and client (for automatic registration)
-        let op_trust_chain = TrustChain::try_new(vec![
-            op_config_response.unwrap(),
-            federation_op_jwt,
-            federation_config_jwt.clone(),
-        ])
+        let op_trust_chain = TrustChain::try_new(
+            vec![
+                op_config_response.unwrap(),
+                federation_op_jwt,
+                federation_config_jwt.clone(),
+            ],
+            &[],
+        )
         .unwrap();
 
-        let client_trust_chain = TrustChain::try_new(vec![
-            client_config_response.unwrap(),
-            federation_client_jwt,
-            federation_config_jwt,
-        ])
+        let client_trust_chain = TrustChain::try_new(
+            vec![
+                client_config_response.unwrap(),
+                federation_client_jwt,
+                federation_config_jwt,
+            ],
+            &[],
+        )
         .unwrap();
 
         // Verify both trust chains are properly structured
@@ -1491,7 +1497,7 @@ mod tests {
             encode(&federation_header(), &trust_anchor_one_config, &encoding_key).unwrap(),
         ];
 
-        let manual_result = TrustChain::try_new(manual_chain);
+        let manual_result = TrustChain::try_new(manual_chain, &[]);
         assert!(manual_result.is_ok(), "manual chain validation: {:?}", manual_result);
 
         let client = FederationClient::new();
@@ -1939,7 +1945,7 @@ mod tests {
         let jwt3 = encode(&federation_header(), &stmt3, &encoding_key).unwrap();
 
         // Create validated trust chain
-        let trust_chain = TrustChain::try_new(vec![jwt1, jwt2, jwt3]).unwrap();
+        let trust_chain = TrustChain::try_new(vec![jwt1, jwt2, jwt3], &[]).unwrap();
 
         // Verify expiration is the minimum
         let exp_timestamp = trust_chain.expiration_timestamp().unwrap();

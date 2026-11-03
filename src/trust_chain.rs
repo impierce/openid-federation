@@ -130,12 +130,14 @@ impl TrustChain {
     ///    the lowest Subordinate Statement, signed with a key endorsed there, and self-signed with
     ///    a key from its own `jwks`.
     ///
-    /// Structural checks (`exp`, `nbf`, non-empty `jwks`, JWT `typ` header, `iss`/`sub` rules) are
-    /// applied to every statement as well.
+    /// Structural checks (`exp`, `nbf`, `iat`, non-empty `jwks`, JWT `typ` header, a `kid` that
+    /// names the signing key, `iss`/`sub` rules) are applied to every statement as well, and every
+    /// claim a statement lists in `crit` must be one of `understood_claims`, the extension claims
+    /// the caller understands and processes (Section 13.4); pass `&[]` when it understands none.
     ///
     /// Reference: OpenID Federation 1.0 - Section 10.2 Validating a Trust Chain
     /// <https://openid.net/specs/openid-federation-1_0.html#name-validating-a-trust-chain>
-    pub fn try_new(trust_chain: Vec<String>) -> FederationResult<Self> {
+    pub fn try_new(trust_chain: Vec<String>, understood_claims: &[&str]) -> FederationResult<Self> {
         let chain_len = trust_chain.len();
 
         if chain_len < 2 {
@@ -148,9 +150,10 @@ impl TrustChain {
         let anchor_jwt = &trust_chain[chain_len - 1];
         let anchor_unverified: EntityConfiguration = extract_claims_unverified(anchor_jwt)?;
         let anchor =
-            EntityConfiguration::from_verified_jwt(anchor_jwt, &anchor_unverified.claims.sub).map_err(|err| {
-                FederationError::TrustChainValidation(format!("Invalid trust anchor entity configuration: {}", err))
-            })?;
+            EntityConfiguration::from_verified_jwt(anchor_jwt, &anchor_unverified.claims.sub, understood_claims)
+                .map_err(|err| {
+                    FederationError::TrustChainValidation(format!("Invalid trust anchor entity configuration: {}", err))
+                })?;
 
         // The entity whose keys are currently authenticated, and those keys.
         let mut endorsed_entity = anchor.claims.sub.clone();
@@ -173,6 +176,7 @@ impl TrustChain {
                 &endorsed_entity,
                 &unverified.claims.sub,
                 &endorsed_keys,
+                understood_claims,
             )
             .map_err(|err| FederationError::TrustChainValidation(format!("Invalid subordinate statement: {}", err)))?;
 
@@ -193,7 +197,7 @@ impl TrustChain {
         }
 
         // Self-signed with its own keys, and identity-consistent.
-        EntityConfiguration::from_verified_jwt(leaf_jwt, &endorsed_entity).map_err(|err| {
+        EntityConfiguration::from_verified_jwt(leaf_jwt, &endorsed_entity, understood_claims).map_err(|err| {
             FederationError::TrustChainValidation(format!("Invalid leaf entity configuration: {}", err))
         })?;
 
@@ -762,8 +766,11 @@ mod tests {
         let (leaf, intermediate_about_leaf, anchor_about_intermediate, anchor, leaf_url, _, anchor_url) =
             distinct_key_chain();
 
-        let chain = TrustChain::try_new(vec![leaf, intermediate_about_leaf, anchor_about_intermediate, anchor])
-            .expect("chain with per-entity keys should validate");
+        let chain = TrustChain::try_new(
+            vec![leaf, intermediate_about_leaf, anchor_about_intermediate, anchor],
+            &[],
+        )
+        .expect("chain with per-entity keys should validate");
 
         assert_eq!(chain.leaf_entity_id_and_configuration().unwrap().0, leaf_url);
         assert_eq!(chain.trust_anchor_entity_id_and_configuration().unwrap().0, anchor_url);
@@ -795,7 +802,7 @@ mod tests {
             "anchor-key",
         );
 
-        TrustChain::try_new(vec![leaf, anchor_about_leaf, anchor]).expect("direct chain should validate");
+        TrustChain::try_new(vec![leaf, anchor_about_leaf, anchor], &[]).expect("direct chain should validate");
     }
 
     #[test]
@@ -814,12 +821,10 @@ mod tests {
             "anchor-key",
         );
 
-        let err = TrustChain::try_new(vec![
-            leaf,
-            intermediate_about_leaf,
-            forged_anchor_about_intermediate,
-            anchor,
-        ])
+        let err = TrustChain::try_new(
+            vec![leaf, intermediate_about_leaf, forged_anchor_about_intermediate, anchor],
+            &[],
+        )
         .expect_err("subordinate statement with an unrelated signature must be rejected");
         assert!(
             matches!(err, FederationError::TrustChainValidation(_)),
@@ -842,7 +847,7 @@ mod tests {
         parts[1] = &tampered_payload;
         let tampered = parts.join(".");
 
-        TrustChain::try_new(vec![leaf, intermediate_about_leaf, tampered, anchor])
+        TrustChain::try_new(vec![leaf, intermediate_about_leaf, tampered, anchor], &[])
             .expect_err("tampered subordinate statement must be rejected");
     }
 
@@ -858,12 +863,15 @@ mod tests {
             "intermediate-key",
         );
 
-        let err = TrustChain::try_new(vec![
-            leaf,
-            intermediate_about_leaf_wrong_keys,
-            anchor_about_intermediate,
-            anchor,
-        ])
+        let err = TrustChain::try_new(
+            vec![
+                leaf,
+                intermediate_about_leaf_wrong_keys,
+                anchor_about_intermediate,
+                anchor,
+            ],
+            &[],
+        )
         .expect_err("leaf signed with a key its superior did not endorse must be rejected");
         assert!(
             err.to_string()
@@ -888,7 +896,7 @@ mod tests {
             "anchor-key",
         );
 
-        let err = TrustChain::try_new(vec![leaf, intermediate_about_leaf, wrong_issuer, anchor])
+        let err = TrustChain::try_new(vec![leaf, intermediate_about_leaf, wrong_issuer, anchor], &[])
             .expect_err("subordinate statement from an unexpected issuer must be rejected");
         assert!(
             err.to_string().contains("not properly linked"),
@@ -957,8 +965,8 @@ mod tests {
         let raw = client.fetch_entity_configuration(&superior_url).await.unwrap();
         let claimed: EntityConfiguration = extract_claims_unverified(&raw).unwrap();
         assert_eq!(claimed.claims.iss, victim_url);
-        assert!(EntityConfiguration::from_verified_jwt(&raw, &victim_url).is_ok());
-        assert!(EntityConfiguration::from_verified_jwt(&raw, &superior_url).is_err());
+        assert!(EntityConfiguration::from_verified_jwt(&raw, &victim_url, &[]).is_ok());
+        assert!(EntityConfiguration::from_verified_jwt(&raw, &superior_url, &[]).is_err());
     }
 
     #[tokio::test]
@@ -1054,7 +1062,7 @@ mod tests {
             .await
             .expect_err("unverifiable subordinate statement must be rejected");
         assert!(
-            err.to_string().contains("not signed with an authenticated key"),
+            err.to_string().contains("does not verify with an authenticated key"),
             "unexpected error: {err}"
         );
     }

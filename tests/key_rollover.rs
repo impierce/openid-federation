@@ -53,7 +53,7 @@ async fn configuration(keys: &FederationKeys) -> EntityConfiguration {
         .sign(keys.active_signer().as_ref())
         .await
         .unwrap();
-    EntityConfiguration::from_verified_jwt(&jwt, &anchor_id()).unwrap()
+    EntityConfiguration::from_verified_jwt(&jwt, &anchor_id(), &[]).unwrap()
 }
 
 /// A Subordinate Statement the Trust Anchor issues with its active key.
@@ -71,7 +71,7 @@ async fn statement(keys: &FederationKeys) -> String {
 }
 
 fn accepts(verifier_jwks: &JwkSet, statement: &str) -> bool {
-    SubordinateStatement::from_verified_jwt(statement, &anchor_id(), &leaf_id(), verifier_jwks).is_ok()
+    SubordinateStatement::from_verified_jwt(statement, &anchor_id(), &leaf_id(), verifier_jwks, &[]).is_ok()
 }
 
 fn kids(jwks: &JwkSet) -> Vec<&str> {

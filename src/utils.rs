@@ -204,31 +204,56 @@ pub struct TrustChainDiscoveryFailure {
 /// This client can be instantiated with any implementation of [`HttpClient`],
 /// allowing for flexibility in HTTP layer implementation (e.g., testing with mocks,
 /// using alternative HTTP libraries).
+///
+/// The client understands no extension claims unless told so with
+/// [`with_understood_claims`](Self::with_understood_claims), so a statement that lists one in
+/// `crit` fails verification (Section 13.4).
 #[derive(Clone)]
 pub struct FederationClient {
     http_client: Arc<dyn HttpClient>,
+    understood_claims: Vec<String>,
 }
 
 impl FederationClient {
     /// Create a new federation client with the default `reqwest`-backed HTTP client.
     pub fn new() -> Self {
-        Self {
-            http_client: Arc::new(ReqwestHttpClient::new()),
-        }
+        Self::with_boxed_http_client(Arc::new(ReqwestHttpClient::new()))
     }
 
     /// Create a federation client with a custom HTTP client implementation.
     pub fn with_http_client<C: HttpClient + 'static>(client: C) -> Self {
-        Self {
-            http_client: Arc::new(client),
-        }
+        Self::with_boxed_http_client(Arc::new(client))
     }
 
     /// Create a federation client with a boxed HTTP client.
     ///
     /// This is useful when you have a trait object or need to store multiple client types.
     pub fn with_boxed_http_client(client: Arc<dyn HttpClient>) -> Self {
-        Self { http_client: client }
+        Self {
+            http_client: client,
+            understood_claims: Vec::new(),
+        }
+    }
+
+    /// The extension claims the application understands and processes, which a statement may
+    /// then list in `crit`. Every statement the client verifies is checked against them, as
+    /// [`TrustChain::try_new`] does.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 13.4 "crit" (Critical) Claim
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-13.4>)
+    #[must_use]
+    pub fn with_understood_claims<I, S>(mut self, claims: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.understood_claims = claims.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// [`with_understood_claims`](Self::with_understood_claims) as the slice the verifiers take.
+    pub(crate) fn understood_claims(&self) -> Vec<&str> {
+        self.understood_claims.iter().map(String::as_str).collect()
     }
 
     /// Fetch an entity configuration from the well-known endpoint.
@@ -259,7 +284,7 @@ impl FederationClient {
         entity_id: &EntityId,
     ) -> FederationResult<(String, EntityConfiguration)> {
         let jwt = self.fetch_entity_configuration(entity_id).await?;
-        let config = EntityConfiguration::from_verified_jwt(&jwt, entity_id)?;
+        let config = EntityConfiguration::from_verified_jwt(&jwt, entity_id, &self.understood_claims())?;
         Ok((jwt, config))
     }
 
@@ -280,7 +305,8 @@ impl FederationClient {
         let jwt = self
             .fetch_subordinate_statement(federation_fetch_endpoint, subject)
             .await?;
-        let statement = SubordinateStatement::from_verified_jwt(&jwt, superior, subject, superior_keys)?;
+        let statement =
+            SubordinateStatement::from_verified_jwt(&jwt, superior, subject, superior_keys, &self.understood_claims())?;
         Ok((jwt, statement))
     }
 
@@ -363,7 +389,7 @@ impl FederationClient {
             ));
         }
 
-        TrustChain::try_new(chain)
+        TrustChain::try_new(chain, &self.understood_claims())
     }
 
     /// Discover every authenticated trust chain reachable from a starting entity.
@@ -575,7 +601,7 @@ impl FederationClient {
                     // Trust Anchor may also act as an Intermediate Entity in another federation
                     // (Section 4.1), and which anchors to trust is the caller's decision.
                     chain.push(config_jwt);
-                    match TrustChain::try_new(chain.clone()) {
+                    match TrustChain::try_new(chain.clone(), &self.understood_claims()) {
                         Ok(trust_chain) => discovery.chains.push(trust_chain),
                         Err(error) => discovery.failures.push(TrustChainDiscoveryFailure {
                             entity_id: entity_id.clone(),
