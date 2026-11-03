@@ -36,8 +36,8 @@ use std::sync::Arc;
 ///
 /// The Trust Mark filters read the Trust Marks the responder issued, from the store it records
 /// them in as a Trust Mark Issuer. A Trust Mark is active, "issued and still valid" in the words
-/// of Section 8.2.1, while it is neither revoked nor expired, see
-/// [`IssuedTrustMark::status_at`](crate::IssuedTrustMark::status_at), and it marks the
+/// of Section 8.2.1, while it is neither revoked nor expired and its `iat` is not in the future,
+/// see [`IssuedTrustMark::status_at`](crate::IssuedTrustMark::status_at), and it marks the
 /// subordinate its `sub` names. A type the responder never issued keeps no subordinate. Without
 /// a Trust Mark store, the endpoint answers the filters as the specification requires of a
 /// responder that does not support them.

@@ -2,6 +2,7 @@
 //! Trust Anchor or Intermediate Entity registered, and the Trust Marks a Trust Mark Issuer issued,
 //! each behind an async trait with an in-memory implementation (ADR 0005).
 
+use crate::jwt::CLOCK_SKEW_LEEWAY;
 use crate::{
     extract_claims_unverified, Constraints, EntityId, EntityMetadata, EntityType, FederationError, FederationResult,
     JwkSet, JwtArtifactType, PolicyOperators, StoreError, SubordinateStatement, SubordinateStatementBuilder, TrustMark,
@@ -267,7 +268,8 @@ impl IssuedTrustMark {
     }
 
     /// The status of the Trust Mark at `now`: `revoked` once it was revoked, else `expired` from
-    /// its `exp` on, else `active`.
+    /// its `exp` on, else `invalid` while its `iat` is more than the clock skew leeway (60
+    /// seconds) after `now`, as [`TrustMark::validate`] refuses it, else `active`.
     ///
     /// Reference: OpenID Federation 1.0 - Section 8.4.2 Trust Mark Status Response
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4.2>)
@@ -276,6 +278,9 @@ impl IssuedTrustMark {
             TrustMarkStatus::Revoked
         } else if self.claims.exp.is_some_and(|exp| exp <= now) {
             TrustMarkStatus::Expired
+        } else if self.claims.iat > now.saturating_add(CLOCK_SKEW_LEEWAY) {
+            // Not issued yet: a relying party refuses it until then, so it is not active.
+            TrustMarkStatus::Invalid
         } else {
             TrustMarkStatus::Active
         }

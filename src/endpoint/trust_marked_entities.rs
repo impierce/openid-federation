@@ -26,8 +26,9 @@ use std::sync::Arc;
 /// | the store fails                                          | `500 server_error`                                               |
 ///
 /// A Trust Mark is active, "issued and still valid" in the words of Section 8.5, while it is
-/// neither revoked nor expired, see [`IssuedTrustMark::status_at`](crate::IssuedTrustMark::status_at).
-/// A type the issuer never issued lists no entity. The response is a JSON array of Entity
+/// neither revoked nor expired and its `iat` is not in the future, see
+/// [`IssuedTrustMark::status_at`](crate::IssuedTrustMark::status_at). A type the issuer never
+/// issued lists no entity. The response is a JSON array of Entity
 /// Identifiers, each once, spelled as its Trust Mark's `sub` spells it, and sorted, so that the
 /// same store gives the same response. The records the store returns are checked against the
 /// request, so a store that answers too broadly does not list entities of another type.

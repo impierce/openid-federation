@@ -50,11 +50,12 @@ struct Issued {
     rp: String,
     expired: String,
     revoked: String,
+    future: String,
 }
 
 /// SIRTFI Trust Marks: two active ones for the OP, one without `exp` for the RP spelled with a
-/// trailing slash, an expired one and a revoked one; and an active Trust Mark of another type for
-/// the OP.
+/// trailing slash, an expired one, a revoked one, and two issued an hour from now, one for the OP
+/// and one for an entity that holds no other; and an active Trust Mark of another type for the OP.
 async fn issued() -> Issued {
     let store = Arc::new(InMemoryTrustMarkStore::new());
     let issued = Issued {
@@ -64,8 +65,12 @@ async fn issued() -> Issued {
         rp: sign_trust_mark("https://rp.example.org/", SIRTFI, now() - 60, None).await,
         expired: sign_trust_mark("https://old.example.org", SIRTFI, now() - 7200, Some(now() - 60)).await,
         revoked: sign_trust_mark("https://revoked.example.org", SIRTFI, now() - 7200, None).await,
+        future: sign_trust_mark("https://future.example.org", SIRTFI, now() + 3600, None).await,
         store,
     };
+    // Issued later than the OP's others, so it would be served first if it counted as active.
+    let op_future = sign_trust_mark("https://op.example.org", SIRTFI, now() + 3600, None).await;
+    issued.store.insert(IssuedTrustMark::from_jwt(op_future).unwrap());
     for jwt in [
         &issued.op,
         &issued.op_renewed,
@@ -73,6 +78,7 @@ async fn issued() -> Issued {
         &issued.rp,
         &issued.expired,
         &issued.revoked,
+        &issued.future,
     ] {
         issued.store.insert(IssuedTrustMark::from_jwt(jwt.as_str()).unwrap());
     }
@@ -161,6 +167,7 @@ async fn listing_sub_keeps_only_that_entity_however_it_is_spelled() {
     for sub in [
         "https://old.example.org",
         "https://revoked.example.org",
+        "https://future.example.org",
         "https://unknown.example.org",
     ] {
         assert!(listed(&endpoint, &query(SIRTFI, Some(sub))).await.is_empty(), "{sub}");
@@ -205,6 +212,7 @@ async fn trust_mark_endpoint_answers_not_found_without_an_active_trust_mark() {
     for (trust_mark_type, sub) in [
         (SIRTFI, "https://old.example.org"),
         (SIRTFI, "https://revoked.example.org"),
+        (SIRTFI, "https://future.example.org"),
         (SIRTFI, "https://unknown.example.org"),
         (OTHER, "https://rp.example.org"),
         ("https://refeds.org/never-issued", "https://op.example.org"),
