@@ -151,6 +151,14 @@ async fn crit_names_only_extension_claims_the_verifier_understands() {
     ));
     assert!(error.contains("a claim the specification defines"), "{error}");
 
+    // `crit` names only claims the statement carries.
+    let absent = configuration(json!({ "crit": ["x"] }), Some("k1")).await;
+    let error = error_of(EntityConfiguration::from_verified_jwt(&absent, &entity(LEAF), &["x"]));
+    assert!(
+        error.contains("\"x\", which is not a claim of the statement"),
+        "{error}"
+    );
+
     let empty = configuration(json!({ "crit": [] }), Some("k1")).await;
     let error = error_of(EntityConfiguration::from_verified_jwt(&empty, &entity(LEAF), &["x"]));
     assert!(error.contains("must not be the empty array"), "{error}");
@@ -171,6 +179,18 @@ async fn crit_names_only_extension_claims_the_verifier_understands() {
     };
     assert!(error_of(verify(&[])).contains("not understood"));
     verify(&["x"]).unwrap();
+}
+
+#[tokio::test]
+async fn entity_configuration_is_not_signed_with_crit_naming_an_absent_claim() {
+    let signer = InMemorySigner::from_der(Algorithm::ES256, "k1", EC_P256_DER).unwrap();
+    let mut configuration = EntityConfiguration::new(entity(LEAF), jwks("k1", None), now() + 3600, now());
+    configuration.crit = Some(vec!["x".to_string()]);
+    let error = configuration.sign(&signer).await.unwrap_err().to_string();
+    assert!(error.contains("not a claim of the statement"), "{error}");
+
+    configuration.claims.additional.insert("x".to_string(), json!(1));
+    configuration.sign(&signer).await.unwrap();
 }
 
 /// A chain whose every statement lists `x` in `crit`: the leaf's Entity Configuration, the

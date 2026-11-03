@@ -155,7 +155,11 @@ impl SubordinateStatement {
                     issuer, subject, err
                 ))
             })?;
-        validate_crit_understood(statement.crit.as_deref(), understood_claims)?;
+        validate_crit_understood(
+            statement.crit.as_deref(),
+            &statement.claims.additional,
+            understood_claims,
+        )?;
         Ok(statement)
     }
 
@@ -362,12 +366,17 @@ const SPECIFIED_ENTITY_STATEMENT_CLAIMS: &[&str] = &[
 ];
 
 /// Checks the `crit` of a statement being verified: it is not `[]`, names no claim the
-/// specification or RFC 7519 defines, and names only claims in `understood_claims`. A recipient
-/// that does not understand a claim listed in `crit` treats the statement as invalid.
+/// specification or RFC 7519 defines, names only claims the statement carries among its
+/// `extension_claims`, and names only claims in `understood_claims`. A recipient that does not
+/// understand a claim listed in `crit` treats the statement as invalid.
 ///
 /// Reference: OpenID Federation 1.0 - Section 13.4 "crit" (Critical) Claim
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-13.4>)
-fn validate_crit_understood(crit: Option<&[String]>, understood_claims: &[&str]) -> FederationResult<()> {
+fn validate_crit_understood(
+    crit: Option<&[String]>,
+    extension_claims: &HashMap<String, serde_json::Value>,
+    understood_claims: &[&str],
+) -> FederationResult<()> {
     let Some(crit) = crit else {
         return Ok(());
     };
@@ -380,6 +389,11 @@ fn validate_crit_understood(crit: Option<&[String]>, understood_claims: &[&str])
         if SPECIFIED_ENTITY_STATEMENT_CLAIMS.contains(&name.as_str()) {
             return Err(FederationError::InvalidSubordinateStatement(format!(
                 "crit names {name:?}, a claim the specification defines"
+            )));
+        }
+        if !extension_claims.contains_key(name) {
+            return Err(FederationError::InvalidSubordinateStatement(format!(
+                "crit names {name:?}, which is not a claim of the statement"
             )));
         }
         if !understood_claims.contains(&name.as_str()) {
@@ -705,7 +719,11 @@ impl EntityConfiguration {
                     entity_id, err
                 ))
             })?;
-        validate_crit_understood(configuration.crit.as_deref(), understood_claims)?;
+        validate_crit_understood(
+            configuration.crit.as_deref(),
+            &configuration.claims.additional,
+            understood_claims,
+        )?;
         Ok(configuration)
     }
 
