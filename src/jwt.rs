@@ -178,10 +178,15 @@ struct TimeClaims {
     exp: Option<i64>,
     #[serde(default, deserialize_with = "numeric_date::deserialize_option")]
     nbf: Option<i64>,
+    #[serde(default, deserialize_with = "numeric_date::deserialize_option")]
+    iat: Option<i64>,
 }
 
 impl TimeClaims {
-    /// Applies `validation`'s time checks the way `jsonwebtoken` does, including its leeway.
+    /// Applies `validation`'s time checks the way `jsonwebtoken` does, including its leeway, and
+    /// checks that `iat`, when present, is not later than now plus the same leeway: the current
+    /// time MUST be after the time a statement was issued (Sections 3.2.1 and 10.2), and
+    /// `jsonwebtoken` does not check `iat`.
     fn validate(&self, validation: &Validation) -> FederationResult<()> {
         use jsonwebtoken::errors::{Error, ErrorKind};
 
@@ -207,12 +212,19 @@ impl TimeClaims {
                 }
             }
         }
+        if let Some(iat) = self.iat {
+            if iat > now.saturating_add(leeway) {
+                return Err(FederationError::InvalidSubordinateStatement(format!(
+                    "the JWT was issued in the future: iat {iat} is later than now ({now}) plus {leeway} seconds"
+                )));
+            }
+        }
         Ok(())
     }
 }
 
 /// The clock skew, in seconds, that the crate's time checks allow: `exp` may lie this far in the
-/// past, and `nbf` and a Trust Mark's `iat` this far in the future.
+/// past, and `nbf` and `iat` this far in the future.
 pub(crate) const CLOCK_SKEW_LEEWAY: i64 = 60;
 
 /// JWT utilities for federation operations.
@@ -330,18 +342,26 @@ impl JwtProcessor {
         Ok(claims)
     }
 
-    /// Verify and decode a JWT using a JWK Set, enforcing artifact type.
+    /// Verify and decode a JWT with the key of a JWK Set that its `kid` names, enforcing the
+    /// artifact type.
     ///
-    /// This method tries all suitable keys in the JWK Set to verify the JWT,
-    /// while validating the correct `typ` header for the artifact type.
+    /// The header's `kid` MUST be a non-empty string that exactly matches the `kid` of a key in
+    /// `jwks`, and the signature MUST validate with that key (Section 3.2.1). No other key is
+    /// tried, and a `kid` is not matched by its DID URL fragment as
+    /// [`JwkSet::find_key`] does.
     ///
     /// # Arguments
     /// * `token` - The JWT string to verify
     /// * `jwks` - The JWK Set containing candidate keys
     /// * `artifact_type` - The expected federation artifact type
     ///
-    /// # Returns
-    /// The decoded claims if verification succeeds, or error if no suitable key found
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidSubordinateStatement`] when the header has no `kid`, an empty
+    /// one, or one no key in `jwks` has, and the errors of [`verify_jwt`](Self::verify_jwt).
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 3.2.1 Entity Statement Validation
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-3.2.1>)
     pub fn verify_jwt_with_jwks<T: for<'de> Deserialize<'de>>(
         &self,
         token: &str,
@@ -352,19 +372,27 @@ impl JwtProcessor {
         let header = jsonwebtoken::decode_header(token)?;
         artifact_type.validate_header_typ(header.typ.as_deref())?;
 
-        let algorithm = header.alg;
-
-        // Try to find the key by kid if present
-        if let Some(kid) = &header.kid {
-            if let Some(jwk) = jwks.find_key(kid) {
-                let decoding_key = jwk.to_decoding_key()?;
-                return self.verify_jwt(token, &decoding_key, algorithm, artifact_type);
+        let kid = match header.kid.as_deref() {
+            None => {
+                return Err(FederationError::InvalidSubordinateStatement(
+                    "the JWT header has no kid".to_string(),
+                ))
             }
-        }
-
-        Err(FederationError::InvalidSubordinateStatement(
-            "No suitable key found for JWT verification".to_string(),
-        ))
+            Some("") => {
+                return Err(FederationError::InvalidSubordinateStatement(
+                    "the JWT header has an empty kid".to_string(),
+                ))
+            }
+            Some(kid) => kid,
+        };
+        let jwk = jwks
+            .keys
+            .iter()
+            .find(|key| key.kid.as_deref() == Some(kid))
+            .ok_or_else(|| {
+                FederationError::InvalidSubordinateStatement(format!("no key in the jwks has the kid {kid:?}"))
+            })?;
+        self.verify_jwt(token, &jwk.to_decoding_key()?, header.alg, artifact_type)
     }
 }
 

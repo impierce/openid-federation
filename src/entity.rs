@@ -114,9 +114,12 @@ impl SubordinateStatement {
     /// known to have been issued by `issuer` about `subject`. It checks, in order:
     /// 1. the structural requirements of [`SubordinateStatement::validate`],
     /// 2. that the claimed `iss` and `sub` are exactly the expected entities,
-    /// 3. that the JWT carries the `entity-statement+jwt` type and is signed with one of
-    ///    `issuer_keys`, which MUST be keys already authenticated for `issuer` (for example the
-    ///    `jwks` of the Subordinate Statement about `issuer`, or the Trust Anchor's keys).
+    /// 3. that the JWT carries the `entity-statement+jwt` type and is signed with the key of
+    ///    `issuer_keys` that its `kid` names, which MUST be keys already authenticated for
+    ///    `issuer` (for example the `jwks` of the Subordinate Statement about `issuer`, or the
+    ///    Trust Anchor's keys), and that `iat` is not in the future,
+    /// 4. that every claim in `crit` is one of `understood_claims`, the extension claims the
+    ///    caller understands and processes (Section 13.4); pass `&[]` when it understands none.
     ///
     /// Reference: OpenID Federation 1.0 - Section 10.2 Validating a Trust Chain
     /// <https://openid.net/specs/openid-federation-1_0.html#name-validating-a-trust-chain>
@@ -125,6 +128,7 @@ impl SubordinateStatement {
         issuer: &EntityId,
         subject: &EntityId,
         issuer_keys: &JwkSet,
+        understood_claims: &[&str],
     ) -> FederationResult<Self> {
         let unverified: Self = extract_claims_unverified(jwt)?;
         unverified.validate()?;
@@ -143,14 +147,16 @@ impl SubordinateStatement {
             )));
         }
 
-        JwtProcessor::new()
+        let statement: Self = JwtProcessor::new()
             .verify_jwt_with_jwks(jwt, issuer_keys, JwtArtifactType::EntityStatement)
             .map_err(|err| {
                 FederationError::InvalidSubordinateStatement(format!(
-                    "Subordinate statement issued by {} about {} is not signed with an authenticated key of the issuer: {}",
+                    "Subordinate statement issued by {} about {} does not verify with an authenticated key of the issuer: {}",
                     issuer, subject, err
                 ))
-            })
+            })?;
+        validate_crit_understood(statement.crit.as_deref(), understood_claims)?;
+        Ok(statement)
     }
 
     // TODO: validate JWT here as well, not only contents. This should check the exp and nbf claims already.
@@ -185,7 +191,8 @@ impl SubordinateStatement {
             }
         }
 
-        // TODO: Validate, if present, `constraints`, `crit`, `metadata_policy`, and `metadata_policy_crit` according to the specification.
+        // `crit` is checked against the claims the verifier understands in `from_verified_jwt`.
+        // TODO: Validate, if present, `constraints`, `metadata_policy`, and `metadata_policy_crit` according to the specification.
 
         Ok(())
     }
@@ -353,6 +360,36 @@ const SPECIFIED_ENTITY_STATEMENT_CLAIMS: &[&str] = &[
     "source_endpoint",
     "trust_anchor",
 ];
+
+/// Checks the `crit` of a statement being verified: it is not `[]`, names no claim the
+/// specification or RFC 7519 defines, and names only claims in `understood_claims`. A recipient
+/// that does not understand a claim listed in `crit` treats the statement as invalid.
+///
+/// Reference: OpenID Federation 1.0 - Section 13.4 "crit" (Critical) Claim
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-13.4>)
+fn validate_crit_understood(crit: Option<&[String]>, understood_claims: &[&str]) -> FederationResult<()> {
+    let Some(crit) = crit else {
+        return Ok(());
+    };
+    if crit.is_empty() {
+        return Err(FederationError::InvalidSubordinateStatement(
+            "crit must not be the empty array".to_string(),
+        ));
+    }
+    for name in crit {
+        if SPECIFIED_ENTITY_STATEMENT_CLAIMS.contains(&name.as_str()) {
+            return Err(FederationError::InvalidSubordinateStatement(format!(
+                "crit names {name:?}, a claim the specification defines"
+            )));
+        }
+        if !understood_claims.contains(&name.as_str()) {
+            return Err(FederationError::InvalidSubordinateStatement(format!(
+                "crit names {name:?}, an extension claim that is not understood"
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// `crit` and `metadata_policy_crit` are never the empty array and never list a name twice.
 fn validate_claim_name_list(claim: &str, names: &[String]) -> FederationResult<()> {
@@ -637,8 +674,10 @@ impl EntityConfiguration {
     /// 1. the structural requirements of [`EntityConfiguration::validate`],
     /// 2. that both `iss` and `sub` are exactly `entity_id`, so a document served by one entity
     ///    cannot claim another entity's identity,
-    /// 3. that the JWT carries the `entity-statement+jwt` type and is signed with a key from its
-    ///    own `jwks` (self-signed).
+    /// 3. that the JWT carries the `entity-statement+jwt` type and is signed with the key of its
+    ///    own `jwks` that its `kid` names (self-signed), and that `iat` is not in the future,
+    /// 4. that every claim in `crit` is one of `understood_claims`, the extension claims the
+    ///    caller understands and processes (Section 13.4); pass `&[]` when it understands none.
     ///
     /// Note that a valid self-signature only proves that the publisher controls the keys it
     /// advertises. Whether those keys are endorsed by a federation is established by
@@ -647,7 +686,7 @@ impl EntityConfiguration {
     ///
     /// Reference: OpenID Federation 1.0 - Section 9 Obtaining Federation Entity Configuration Information
     /// <https://openid.net/specs/openid-federation-1_0.html#name-obtaining-federation-entity->
-    pub fn from_verified_jwt(jwt: &str, entity_id: &EntityId) -> FederationResult<Self> {
+    pub fn from_verified_jwt(jwt: &str, entity_id: &EntityId, understood_claims: &[&str]) -> FederationResult<Self> {
         let unverified: Self = extract_claims_unverified(jwt)?;
         unverified.validate()?;
 
@@ -658,14 +697,16 @@ impl EntityConfiguration {
             )));
         }
 
-        JwtProcessor::new()
+        let configuration: Self = JwtProcessor::new()
             .verify_jwt_with_jwks(jwt, &unverified.jwks, JwtArtifactType::EntityStatement)
             .map_err(|err| {
                 FederationError::InvalidSubordinateStatement(format!(
-                    "Entity configuration of {} is not signed with a key from its own jwks: {}",
+                    "Entity configuration of {} does not verify with a key from its own jwks: {}",
                     entity_id, err
                 ))
-            })
+            })?;
+        validate_crit_understood(configuration.crit.as_deref(), understood_claims)?;
+        Ok(configuration)
     }
 
     // TODO: validate JWT here as well, not only contents. This should check the exp and nbf claims already.
@@ -720,7 +761,7 @@ impl EntityConfiguration {
             entry.validate()?;
         }
 
-        // TODO: Validate `crit` if present according to the specification.
+        // `crit` is checked against the claims the verifier understands in `from_verified_jwt`.
 
         Ok(())
     }
@@ -854,7 +895,9 @@ impl EntityConfiguration {
             )));
         }
         let jwt = sign_federation_jwt(self, JwtArtifactType::EntityStatement, signer).await?;
-        EntityConfiguration::from_verified_jwt(&jwt, &self.claims.sub).map_err(|err| {
+        // The issuer understands the extension claims it marks critical itself.
+        let understood: Vec<&str> = self.crit.iter().flatten().map(String::as_str).collect();
+        EntityConfiguration::from_verified_jwt(&jwt, &self.claims.sub, &understood).map_err(|err| {
             FederationError::Configuration(format!(
                 "the Entity Configuration signed with {:?} does not verify against its own jwks: {err}",
                 signer.kid()
