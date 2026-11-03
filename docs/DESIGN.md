@@ -34,8 +34,10 @@ openid-federation/
 │   │   ├── entity_configuration.rs  # EntityConfigurationEndpoint (Section 9)
 │   │   ├── fetch.rs     # FetchEndpoint (Section 8.1)
 │   │   ├── historical_keys.rs  # HistoricalKeysEndpoint (Section 8.7)
-│   │   ├── list.rs      # ListEndpoint (Section 8.2)
-│   │   └── trust_mark_status.rs  # TrustMarkStatusEndpoint (Section 8.4)
+│   │   ├── list.rs      # ListEndpoint (Section 8.2), filtered by a TrustMarkStore when it has one
+│   │   ├── trust_mark_status.rs  # TrustMarkStatusEndpoint (Section 8.4)
+│   │   ├── trust_marked_entities.rs  # TrustMarkedEntitiesEndpoint (Section 8.5)
+│   │   └── trust_mark.rs  # TrustMarkEndpoint (Section 8.6)
 │   ├── store.rs         # Subordinate, SubordinateStore, InMemorySubordinateStore; IssuedTrustMark, TrustMarkStore, InMemoryTrustMarkStore
 │   ├── onboarding.rs    # FederationClient::check_candidate_subordinate, SubordinatePolicy, CandidateReport (Appendix A.1)
 │   ├── keys.rs          # FederationKeys across rollover (Section 11.2), KeyStore, InMemoryKeyStore

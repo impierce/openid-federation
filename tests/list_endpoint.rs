@@ -1,12 +1,19 @@
 //! Listing Immediate Subordinates with `ListEndpoint` over a `SubordinateStore` (OpenID Federation
 //! 1.0, Sections 8, 8.2.1 and 8.2.2): every subordinate without a filter, the `entity_type` and
-//! `intermediate` filters from the subordinate records, `unsupported_parameter` for the Trust Mark
-//! filters, and a response `FederationClient::list_entities` reads.
+//! `intermediate` filters from the subordinate records, the Trust Mark filters from a
+//! `TrustMarkStore` and `unsupported_parameter` for them without one, and a response
+//! `FederationClient::list_entities` reads.
+//!
+//! The keys in `tests/data/signer/` are test fixtures generated once for the signer suite. They
+//! protect nothing.
 
 use async_trait::async_trait;
+use jsonwebtoken::Algorithm;
 use openid_federation::{
-    EndpointRequest, EndpointResponse, EntityId, EntityType, ErrorCode, ErrorResponse, FederationClient,
-    FederationError, InMemorySubordinateStore, JwkSet, ListEndpoint, StoreError, Subordinate, SubordinateStore,
+    sign_federation_jwt, EndpointRequest, EndpointResponse, EntityId, EntityType, ErrorCode, ErrorResponse,
+    FederationClient, FederationError, InMemorySigner, InMemorySubordinateStore, InMemoryTrustMarkStore,
+    IssuedTrustMark, JwkSet, JwtArtifactType, ListEndpoint, StoreError, Subordinate, SubordinateStore, TrustMark,
+    TrustMarkStore,
 };
 use std::sync::Arc;
 use url::Url;
@@ -110,7 +117,7 @@ async fn intermediate_true_keeps_only_intermediate_entities() {
 }
 
 #[tokio::test]
-async fn trust_mark_filters_are_unsupported() {
+async fn trust_mark_filters_are_unsupported_without_a_trust_mark_store() {
     for query in [
         "trust_marked=true",
         "trust_mark_type=https%3A%2F%2Fexample.org%2Fmarks%2Fcertified",
@@ -122,6 +129,147 @@ async fn trust_mark_filters_are_unsupported() {
     assert_eq!(listed("trust_marked=false").await.len(), 4, "only true filters");
 }
 
+const SIRTFI: &str = "https://refeds.org/sirtfi";
+const OTHER: &str = "https://refeds.org/other";
+
+/// A Trust Mark of `trust_mark_type` for `subject`, valid until `exp`, recorded in `store`.
+async fn issue(store: &InMemoryTrustMarkStore, subject: &str, trust_mark_type: &str, exp: Option<i64>) -> String {
+    let now = chrono::Utc::now().timestamp();
+    let trust_mark = TrustMark {
+        exp: exp.map(|exp| now + exp),
+        ..TrustMark::new(
+            EntityId::parse("https://tmi.example.org").unwrap(),
+            EntityId::parse(subject).unwrap(),
+            trust_mark_type,
+            now - 7200,
+        )
+    };
+    let signer = InMemorySigner::from_der(
+        Algorithm::ES256,
+        "tmi-key",
+        include_bytes!("data/signer/ec-p256.pkcs8.der"),
+    )
+    .unwrap();
+    // Signed without `TrustMark::sign`, which refuses an expired Trust Mark.
+    let jwt = sign_federation_jwt(&trust_mark, JwtArtifactType::TrustMark, &signer)
+        .await
+        .unwrap();
+    store.insert(IssuedTrustMark::from_jwt(jwt.as_str()).unwrap());
+    jwt
+}
+
+/// Active SIRTFI Trust Marks for the OP, spelled with a trailing slash, and for the entity that is
+/// both, spelled without; an active Trust Mark of another type for the RP; an expired and a
+/// revoked one for the Intermediate Entity; and an active one for an entity that is no
+/// subordinate.
+async fn trust_marks() -> Arc<InMemoryTrustMarkStore> {
+    let store = Arc::new(InMemoryTrustMarkStore::new());
+    issue(&store, "https://op.example.org/", SIRTFI, Some(3600)).await;
+    issue(&store, "https://both.example.org", SIRTFI, None).await;
+    issue(&store, "https://rp.example.org/app", OTHER, None).await;
+    issue(&store, "https://intermediate.example.org", SIRTFI, Some(-60)).await;
+    let revoked = issue(&store, "https://intermediate.example.org", OTHER, None).await;
+    assert!(store.revoke(&revoked, 0));
+    issue(&store, "https://stranger.example.org", SIRTFI, None).await;
+    store
+}
+
+async fn listed_with(endpoint: &ListEndpoint, query: &str) -> Vec<String> {
+    let response = endpoint.handle(&EndpointRequest::get(query)).await;
+    assert_eq!(response.status, 200, "{query:?}: {}", response.body);
+    serde_json::from_str(&response.body).unwrap()
+}
+
+#[tokio::test]
+async fn trust_mark_filters_keep_subordinates_with_an_active_trust_mark() {
+    let endpoint = endpoint().with_trust_marks(trust_marks().await);
+    let sirtfi = format!("trust_mark_type={}", SIRTFI.replace(':', "%3A").replace('/', "%2F"));
+    let other = format!("trust_mark_type={}", OTHER.replace(':', "%3A").replace('/', "%2F"));
+
+    for (query, expected) in [
+        (
+            "trust_marked=true".to_string(),
+            &[
+                "https://both.example.org/",
+                "https://op.example.org",
+                "https://rp.example.org/app",
+            ][..],
+        ),
+        (sirtfi.clone(), &["https://both.example.org/", "https://op.example.org"]),
+        (other.clone(), &["https://rp.example.org/app"]),
+        (
+            format!("{sirtfi}&trust_marked=false"),
+            &["https://both.example.org/", "https://op.example.org"],
+        ),
+        (
+            format!("{sirtfi}&trust_marked=true"),
+            &["https://both.example.org/", "https://op.example.org"],
+        ),
+        (
+            "trust_marked=true&entity_type=openid_relying_party".to_string(),
+            &["https://both.example.org/", "https://rp.example.org/app"],
+        ),
+        (format!("{other}&intermediate=true"), &[]),
+        (
+            "trust_mark_type=https%3A%2F%2Frefeds.org%2Fnever-issued".to_string(),
+            &[],
+        ),
+    ] {
+        assert_eq!(listed_with(&endpoint, &query).await, expected, "{query}");
+    }
+    assert_eq!(listed_with(&endpoint, "trust_marked=false").await.len(), 4);
+}
+
+#[tokio::test]
+async fn trust_mark_filters_check_the_records_the_store_returns() {
+    /// Answers every query with every Trust Mark, as a store with a broken query would.
+    struct BroadStore(Arc<InMemoryTrustMarkStore>);
+
+    #[async_trait]
+    impl TrustMarkStore for BroadStore {
+        async fn trust_mark(&self, jwt: &str) -> Result<Option<IssuedTrustMark>, StoreError> {
+            self.0.trust_mark(jwt).await
+        }
+
+        async fn trust_marks(&self, _: Option<&str>, _: Option<&EntityId>) -> Result<Vec<IssuedTrustMark>, StoreError> {
+            self.0.trust_marks(None, None).await
+        }
+    }
+
+    let endpoint = endpoint().with_trust_marks(Arc::new(BroadStore(trust_marks().await)));
+    assert_eq!(
+        listed_with(&endpoint, "trust_mark_type=https%3A%2F%2Frefeds.org%2Fother").await,
+        ["https://rp.example.org/app"]
+    );
+}
+
+#[tokio::test]
+async fn trust_mark_store_failure_is_a_server_error() {
+    struct UnreachableTrustMarks;
+
+    #[async_trait]
+    impl TrustMarkStore for UnreachableTrustMarks {
+        async fn trust_mark(&self, _: &str) -> Result<Option<IssuedTrustMark>, StoreError> {
+            Err(StoreError::msg("database unreachable"))
+        }
+
+        async fn trust_marks(&self, _: Option<&str>, _: Option<&EntityId>) -> Result<Vec<IssuedTrustMark>, StoreError> {
+            Err(StoreError::msg("database unreachable"))
+        }
+    }
+
+    let endpoint = endpoint().with_trust_marks(Arc::new(UnreachableTrustMarks));
+    let request = EndpointRequest::get("trust_marked=true");
+    let response = endpoint.handle(&request).await;
+    assert_eq!(response.status, 500);
+    assert_eq!(error_code(&response), ErrorCode::ServerError);
+    let error = endpoint.try_handle(&request).await.unwrap_err();
+    assert!(matches!(error, FederationError::Store(_)), "{error:?}");
+
+    // A request without a Trust Mark filter does not ask the Trust Mark store.
+    assert_eq!(listed_with(&endpoint, "").await.len(), 4);
+}
+
 #[tokio::test]
 async fn malformed_boolean_or_repeated_filter_is_an_invalid_request() {
     for query in [
@@ -130,6 +278,17 @@ async fn malformed_boolean_or_repeated_filter_is_an_invalid_request() {
         "trust_marked=1",
     ] {
         let response = endpoint().handle(&EndpointRequest::get(query)).await;
+        assert_eq!(response.status, 400, "{query:?}");
+        assert_eq!(error_code(&response), ErrorCode::InvalidRequest, "{query:?}");
+    }
+
+    let endpoint = endpoint().with_trust_marks(Arc::new(InMemoryTrustMarkStore::new()));
+    for query in [
+        "trust_marked=yes",
+        "trust_marked=true&trust_marked=true",
+        "trust_mark_type=a&trust_mark_type=b",
+    ] {
+        let response = endpoint.handle(&EndpointRequest::get(query)).await;
         assert_eq!(response.status, 400, "{query:?}");
         assert_eq!(error_code(&response), ErrorCode::InvalidRequest, "{query:?}");
     }
