@@ -34,8 +34,9 @@ openid-federation/
 │   │   ├── entity_configuration.rs  # EntityConfigurationEndpoint (Section 9)
 │   │   ├── fetch.rs     # FetchEndpoint (Section 8.1)
 │   │   ├── historical_keys.rs  # HistoricalKeysEndpoint (Section 8.7)
-│   │   └── list.rs      # ListEndpoint (Section 8.2)
-│   ├── store.rs         # Subordinate, SubordinateStore, InMemorySubordinateStore
+│   │   ├── list.rs      # ListEndpoint (Section 8.2)
+│   │   └── trust_mark_status.rs  # TrustMarkStatusEndpoint (Section 8.4)
+│   ├── store.rs         # Subordinate, SubordinateStore, InMemorySubordinateStore; IssuedTrustMark, TrustMarkStore, InMemoryTrustMarkStore
 │   ├── keys.rs          # FederationKeys across rollover (Section 11.2), KeyStore, InMemoryKeyStore
 │   └── error.rs         # FederationError, EndpointError, FederationResult
 ├── fuzz/                # cargo-fuzz targets; a workspace of its own
@@ -68,8 +69,7 @@ The relying side is unchanged by any of this, and a relying-only application pul
 
 ```
 src/
-├── endpoint/     # + the remaining endpoint handlers
-└── store.rs      # + the storage trait for Trust Marks, with an in-memory implementation
+└── endpoint/     # + the remaining endpoint handlers
 ```
 
 The `Signer` trait and the function that builds a compact JWS with it join the JOSE layer in `jwt.rs`.

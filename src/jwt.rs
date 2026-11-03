@@ -280,8 +280,9 @@ impl JwtProcessor {
     /// * `algorithm` - The expected signing algorithm
     /// * `artifact_type` - The expected federation artifact type
     ///
-    /// `exp` is required unless the processor's validation says otherwise, except for Trust Marks
-    /// and Trust Mark delegations, which may omit it; when present, it is checked.
+    /// `exp` is required unless the processor's validation says otherwise, except for Trust Marks,
+    /// Trust Mark delegations and Trust Mark Status Responses, which may omit it; when present, it
+    /// is checked.
     ///
     /// # Returns
     /// The decoded claims if verification and typ validation succeed
@@ -306,9 +307,12 @@ impl JwtProcessor {
         let mut time_validation = validation.clone();
         if matches!(
             artifact_type,
-            JwtArtifactType::TrustMark | JwtArtifactType::TrustMarkDelegation
+            JwtArtifactType::TrustMark
+                | JwtArtifactType::TrustMarkDelegation
+                | JwtArtifactType::TrustMarkStatusResponse
         ) {
-            // A Trust Mark or a delegation without `exp` does not expire (Sections 7.1 and 7.2.1).
+            // A Trust Mark or a delegation without `exp` does not expire (Sections 7.1 and 7.2.1),
+            // and a Trust Mark Status Response has no `exp` (Section 8.4.2).
             time_validation.required_spec_claims.remove("exp");
         }
         validation.validate_exp = false;

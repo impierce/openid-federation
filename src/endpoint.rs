@@ -17,11 +17,13 @@ mod entity_configuration;
 mod fetch;
 mod historical_keys;
 mod list;
+mod trust_mark_status;
 
 pub use entity_configuration::*;
 pub use fetch::*;
 pub use historical_keys::*;
 pub use list::*;
+pub use trust_mark_status::*;
 
 /// The content type of an [`ErrorResponse`] and of the other JSON responses of the federation
 /// endpoints.
@@ -43,6 +45,12 @@ pub const ENTITY_STATEMENT_CONTENT_TYPE: &str = "application/entity-statement+jw
 /// Reference: OpenID Federation 1.0 - Section 8.7.2 Federation Historical Keys Response
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-8.7.2>)
 pub const JWK_SET_CONTENT_TYPE: &str = "application/jwk-set+jwt";
+
+/// The content type of a successful Trust Mark Status response.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.4.2 Trust Mark Status Response
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-8.4.2>)
+pub const TRUST_MARK_STATUS_RESPONSE_CONTENT_TYPE: &str = "application/trust-mark-status-response+jwt";
 
 /// What a federation endpoint handler answers: the HTTP status, the content type and the body.
 ///
