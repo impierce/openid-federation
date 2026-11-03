@@ -1,6 +1,10 @@
 //! Common types used throughout the OpenID Federation implementation.
 
-use crate::{jwt::JwtClaims, FederationError, FederationResult, JwkSet};
+use crate::entity::validate_entity_id_for_signing;
+use crate::jwt::{numeric_date, CLOCK_SKEW_LEEWAY};
+use crate::{
+    extract_claims_unverified, sign_federation_jwt, FederationError, FederationResult, JwkSet, JwtArtifactType, Signer,
+};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -224,24 +228,464 @@ impl TrustMarkEntry {
     }
 }
 
-/// Trust mark as defined in the OpenID Federation specification.
+/// The claim names Section 7.1 defines for a Trust Mark.
+const TRUST_MARK_CLAIMS: &[&str] = &[
+    "iss",
+    "sub",
+    "trust_mark_type",
+    "iat",
+    "logo_uri",
+    "exp",
+    "ref",
+    "delegation",
+];
+
+/// The claim names Section 7.2.1 defines for a Trust Mark delegation.
+const TRUST_MARK_DELEGATION_CLAIMS: &[&str] = &["iss", "sub", "trust_mark_type", "iat", "exp", "ref"];
+
+/// The claims of a Trust Mark JWT, which a Trust Mark Issuer signs as a `trust-mark+jwt` to
+/// attest that its subject meets the requirements of the Trust Mark type.
 ///
-/// Reference: OpenID Federation 1.0 - Section 6 Trust Marks
-/// <https://openid.net/specs/openid-federation-1_0.html#name-trust-marks>
+/// A Trust Mark without `exp` does not expire. Claims the specification does not define, such as
+/// `organization_name` in the examples of Section 7.4, are kept in `additional`.
+///
+/// Reference: OpenID Federation 1.0 - Section 7.1 Trust Mark Claims
+/// <https://openid.net/specs/openid-federation-1_0.html#section-7.1>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrustMark {
-    // TODO: exp should be OPTIONAL
-    #[serde(flatten)]
-    pub claims: JwtClaims,
+    /// The Entity Identifier of the Trust Mark Issuer.
+    pub iss: EntityId,
+    /// The Entity Identifier of the Entity the Trust Mark applies to.
+    pub sub: EntityId,
+    /// The identifier of the Trust Mark type.
     pub trust_mark_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// When the Trust Mark was issued, in seconds since the Unix epoch.
+    #[serde(deserialize_with = "numeric_date::deserialize")]
+    pub iat: i64,
+    /// A logo for the issued Trust Mark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logo_uri: Option<Url>,
-    /// Optional reference URL to human-readable issuance details
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// When the Trust Mark stops being valid, in seconds since the Unix epoch. Without it the
+    /// Trust Mark does not expire.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "numeric_date::deserialize_option"
+    )]
+    pub exp: Option<i64>,
+    /// Human-readable information about the issuance of the Trust Mark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#ref: Option<Url>,
-    /// The string must represent a trust mark delegation JWT
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// A Trust Mark delegation JWT ([`TrustMarkDelegation`]) by which the owner of the Trust Mark
+    /// type lets `iss` issue Trust Marks of that type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation: Option<String>,
+    /// Claims the specification does not define.
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
+}
+
+impl TrustMark {
+    /// A Trust Mark of `trust_mark_type` that `issuer` issues to `subject` at `iat`, without
+    /// expiry, logo, reference, delegation or additional claims.
+    pub fn new(issuer: EntityId, subject: EntityId, trust_mark_type: impl Into<String>, iat: i64) -> Self {
+        Self {
+            iss: issuer,
+            sub: subject,
+            trust_mark_type: trust_mark_type.into(),
+            iat,
+            logo_uri: None,
+            exp: None,
+            r#ref: None,
+            delegation: None,
+            additional: HashMap::new(),
+        }
+    }
+
+    /// Validate the syntax of the Trust Mark: `trust_mark_type` is not empty, no additional claim
+    /// takes a name Section 7.1 defines, `iat` is not in the future, and `exp`, if any, is neither
+    /// in the past nor at or before `iat`, allowing 60 seconds of clock skew.
+    ///
+    /// A `delegation` must be a JWT typed `trust-mark-delegation+jwt` that names its signing key in
+    /// `kid`, whose claims pass [`TrustMarkDelegation::validate`], whose `trust_mark_type` equals the
+    /// Trust Mark's and whose `sub` is the Trust Mark's issuer.
+    ///
+    /// This does not verify the signature of the Trust Mark or of its delegation, nor whether the
+    /// issuer or the owner is trusted (Section 7.3).
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidTrustMark`] naming the first rule the Trust Mark breaks.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 7.1 Trust Mark Claims
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-7.1> and Section 7.2.2
+    /// Validating a Trust Mark Delegation
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-7.2.2>
+    pub fn validate(&self) -> FederationResult<()> {
+        validate_trust_mark_claims(
+            "Trust Mark",
+            &self.trust_mark_type,
+            self.iat,
+            self.exp,
+            &self.additional,
+            TRUST_MARK_CLAIMS,
+        )?;
+
+        let Some(delegation) = &self.delegation else {
+            return Ok(());
+        };
+        let invalid = |reason: String| {
+            FederationError::InvalidTrustMark(format!(
+                "the delegation of the Trust Mark of type {}: {reason}",
+                self.trust_mark_type
+            ))
+        };
+        let header = jsonwebtoken::decode_header(delegation).map_err(|err| invalid(format!("is not a JWT: {err}")))?;
+        JwtArtifactType::TrustMarkDelegation
+            .validate_header_typ(header.typ.as_deref())
+            .map_err(|err| invalid(err.to_string()))?;
+        if header.kid.as_deref().is_none_or(str::is_empty) {
+            return Err(invalid("names no signing key in kid".to_string()));
+        }
+        let claims: TrustMarkDelegation =
+            extract_claims_unverified(delegation).map_err(|err| invalid(format!("has no delegation claims: {err}")))?;
+        claims.validate()?;
+        if claims.trust_mark_type != self.trust_mark_type {
+            return Err(invalid(format!(
+                "delegates Trust Marks of type {}",
+                claims.trust_mark_type
+            )));
+        }
+        if claims.sub != self.iss {
+            return Err(invalid(format!(
+                "delegates to {}, not to the issuer {}",
+                claims.sub, self.iss
+            )));
+        }
+        Ok(())
+    }
+
+    /// Signs this Trust Mark with `signer`, one of the issuer's Federation Entity Keys, as a
+    /// `trust-mark+jwt` that names the key in `kid`.
+    ///
+    /// The Trust Mark must pass [`TrustMark::validate`], and `iss` and `sub` must use `https`, have
+    /// a host and have no fragment. Whether the signer's key is one the issuer publishes cannot be
+    /// checked here; verifiers check it against the issuer's authenticated keys.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`TrustMark::validate`], [`FederationError::Configuration`] for an Entity
+    /// Identifier that cannot be signed, and the errors of [`sign_federation_jwt`].
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 7 Trust Marks
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-7>
+    pub async fn sign(&self, signer: &dyn Signer) -> FederationResult<String> {
+        self.validate()?;
+        for (claim, entity_id) in [("iss", &self.iss), ("sub", &self.sub)] {
+            validate_entity_id_for_signing(claim, entity_id)?;
+        }
+        sign_federation_jwt(self, JwtArtifactType::TrustMark, signer).await
+    }
+
+    /// Signs this Trust Mark with [`TrustMark::sign`] and wraps it in the [`TrustMarkEntry`] the
+    /// subject publishes in the `trust_marks` claim of its Entity Configuration.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`TrustMark::sign`].
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 3.1.2
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-3.1.2>
+    pub async fn sign_entry(&self, signer: &dyn Signer) -> FederationResult<TrustMarkEntry> {
+        Ok(TrustMarkEntry {
+            trust_mark_type: self.trust_mark_type.clone(),
+            trust_mark: self.sign(signer).await?,
+        })
+    }
+}
+
+/// The claims of a Trust Mark delegation JWT, which the owner of a Trust Mark type signs as a
+/// `trust-mark-delegation+jwt` to let another Entity issue Trust Marks of that type. The Trust
+/// Mark Issuer carries it in the `delegation` claim of its Trust Marks, and the Trust Anchor lists
+/// the owner in `trust_mark_owners`.
+///
+/// A delegation without `exp` does not expire. Claims the specification does not define are kept
+/// in `additional`.
+///
+/// Reference: OpenID Federation 1.0 - Section 7.2.1 Trust Mark Delegation JWT
+/// <https://openid.net/specs/openid-federation-1_0.html#section-7.2.1>
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrustMarkDelegation {
+    /// The Entity Identifier of the owner of the Trust Mark type.
+    pub iss: EntityId,
+    /// The Entity Identifier of the Trust Mark Issuer the delegation applies to.
+    pub sub: EntityId,
+    /// The identifier of the Trust Mark type.
+    pub trust_mark_type: String,
+    /// When the delegation was issued, in seconds since the Unix epoch.
+    #[serde(deserialize_with = "numeric_date::deserialize")]
+    pub iat: i64,
+    /// When the delegation stops being valid, in seconds since the Unix epoch. Without it the
+    /// delegation does not expire.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "numeric_date::deserialize_option"
+    )]
+    pub exp: Option<i64>,
+    /// Human-readable information connected to the Trust Mark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#ref: Option<Url>,
+    /// Claims the specification does not define.
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
+}
+
+impl TrustMarkDelegation {
+    /// A delegation by which `owner` lets `issuer` issue Trust Marks of `trust_mark_type`, issued
+    /// at `iat`, without expiry, reference or additional claims.
+    pub fn new(owner: EntityId, issuer: EntityId, trust_mark_type: impl Into<String>, iat: i64) -> Self {
+        Self {
+            iss: owner,
+            sub: issuer,
+            trust_mark_type: trust_mark_type.into(),
+            iat,
+            exp: None,
+            r#ref: None,
+            additional: HashMap::new(),
+        }
+    }
+
+    /// Validate the syntax of the delegation: `trust_mark_type` is not empty, no additional claim
+    /// takes a name Section 7.2.1 defines, `iat` is not in the future, and `exp`, if any, is
+    /// neither in the past nor at or before `iat`, allowing 60 seconds of clock skew.
+    ///
+    /// This does not verify a signature, nor that the owner is listed in `trust_mark_owners`
+    /// (Section 7.2.2).
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidTrustMark`] naming the first rule the delegation breaks.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 7.2.1 Trust Mark Delegation JWT
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-7.2.1>
+    pub fn validate(&self) -> FederationResult<()> {
+        validate_trust_mark_claims(
+            "Trust Mark delegation",
+            &self.trust_mark_type,
+            self.iat,
+            self.exp,
+            &self.additional,
+            TRUST_MARK_DELEGATION_CLAIMS,
+        )
+    }
+
+    /// Signs this delegation with `signer`, one of the owner's Federation Entity Keys, as a
+    /// `trust-mark-delegation+jwt` that names the key in `kid`. The result goes into the
+    /// `delegation` claim of the Trust Marks the delegated issuer signs.
+    ///
+    /// The delegation must pass [`TrustMarkDelegation::validate`], and `iss` and `sub` must use
+    /// `https`, have a host and have no fragment. Whether the signer's key is one the owner
+    /// publishes in `trust_mark_owners` cannot be checked here.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`TrustMarkDelegation::validate`], [`FederationError::Configuration`] for an
+    /// Entity Identifier that cannot be signed, and the errors of [`sign_federation_jwt`].
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 7.2.1 Trust Mark Delegation JWT
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-7.2.1>
+    pub async fn sign(&self, signer: &dyn Signer) -> FederationResult<String> {
+        self.validate()?;
+        for (claim, entity_id) in [("iss", &self.iss), ("sub", &self.sub)] {
+            validate_entity_id_for_signing(claim, entity_id)?;
+        }
+        sign_federation_jwt(self, JwtArtifactType::TrustMarkDelegation, signer).await
+    }
+}
+
+/// The status of a Trust Mark, as its issuer reports it.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.4.2 Trust Mark Status Response
+/// <https://openid.net/specs/openid-federation-1_0.html#section-8.4.2>
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrustMarkStatus {
+    /// The Trust Mark is active.
+    #[serde(rename = "active")]
+    Active,
+    /// The Trust Mark has expired.
+    #[serde(rename = "expired")]
+    Expired,
+    /// The Trust Mark was revoked.
+    #[serde(rename = "revoked")]
+    Revoked,
+    /// Signature validation failed or another error was detected.
+    #[serde(rename = "invalid")]
+    Invalid,
+    /// A status value defined outside this specification, kept verbatim.
+    #[serde(untagged)]
+    Other(String),
+}
+
+/// The claim names Section 8.4.2 defines for a Trust Mark Status Response.
+const TRUST_MARK_STATUS_CLAIMS: &[&str] = &["iss", "iat", "trust_mark", "status"];
+
+/// The claims of a Trust Mark Status Response, which a Trust Mark Issuer signs as a
+/// `trust-mark-status-response+jwt` to report the status of a Trust Mark it issued.
+///
+/// The response has no `exp`. Claims the specification does not define are kept in `additional`.
+///
+/// Reference: OpenID Federation 1.0 - Section 8.4.2 Trust Mark Status Response
+/// <https://openid.net/specs/openid-federation-1_0.html#section-8.4.2>
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrustMarkStatusResponse {
+    /// The Entity Identifier of the Trust Mark Issuer that signs the response.
+    pub iss: EntityId,
+    /// When the response was issued, in seconds since the Unix epoch.
+    #[serde(deserialize_with = "numeric_date::deserialize")]
+    pub iat: i64,
+    /// The Trust Mark JWT the response is about.
+    pub trust_mark: String,
+    /// The status of the Trust Mark.
+    pub status: TrustMarkStatus,
+    /// Claims the specification does not define.
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
+}
+
+impl TrustMarkStatusResponse {
+    /// A response by `issuer` at `iat` reporting `status` for `trust_mark`.
+    pub fn new(issuer: EntityId, iat: i64, trust_mark: impl Into<String>, status: TrustMarkStatus) -> Self {
+        Self {
+            iss: issuer,
+            iat,
+            trust_mark: trust_mark.into(),
+            status,
+            additional: HashMap::new(),
+        }
+    }
+
+    /// Validate the syntax of the response: `trust_mark` and an additional `status` value are not
+    /// empty, no additional claim takes a name Section 8.4.2 defines, and `iat` is not in the
+    /// future, allowing 60 seconds of clock skew.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidTrustMark`] naming the first rule the response breaks.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.4.2 Trust Mark Status Response
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.4.2>
+    pub fn validate(&self) -> FederationResult<()> {
+        let invalid = |reason: &str| FederationError::InvalidTrustMark(format!("Trust Mark Status Response: {reason}"));
+        if self.trust_mark.is_empty() {
+            return Err(invalid("trust_mark is empty"));
+        }
+        if self.status == TrustMarkStatus::Other(String::new()) {
+            return Err(invalid("status is empty"));
+        }
+        if let Some(name) = self
+            .additional
+            .keys()
+            .find(|name| TRUST_MARK_STATUS_CLAIMS.contains(&name.as_str()))
+        {
+            return Err(invalid(&format!(
+                "additional claim {name:?} is a claim the specification defines"
+            )));
+        }
+        if self.iat > chrono::Utc::now().timestamp().saturating_add(CLOCK_SKEW_LEEWAY) {
+            return Err(invalid("it is issued in the future"));
+        }
+        Ok(())
+    }
+
+    /// Signs this response with `signer`, one of the issuer's Federation Entity Keys, as a
+    /// `trust-mark-status-response+jwt` that names the key in `kid`.
+    ///
+    /// The response must pass [`TrustMarkStatusResponse::validate`], and `iss` must use `https`,
+    /// have a host and have no fragment.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`TrustMarkStatusResponse::validate`], [`FederationError::Configuration`] for
+    /// an `iss` that cannot be signed, and the errors of [`sign_federation_jwt`].
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.4.2 Trust Mark Status Response
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.4.2>
+    pub async fn sign(&self, signer: &dyn Signer) -> FederationResult<String> {
+        self.validate()?;
+        validate_entity_id_for_signing("iss", &self.iss)?;
+        sign_federation_jwt(self, JwtArtifactType::TrustMarkStatusResponse, signer).await
+    }
+
+    /// Decodes and authenticates a Trust Mark Status Response from `issuer`: the JWT must be typed
+    /// `trust-mark-status-response+jwt`, be signed with one of `issuer_keys`, which must be keys
+    /// already authenticated for the issuer, pass [`TrustMarkStatusResponse::validate`], and have
+    /// `iss` equal to `issuer`. The caller also checks that `trust_mark` is the Trust Mark it
+    /// asked about.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the signature and type check, of [`TrustMarkStatusResponse::validate`], and
+    /// [`FederationError::InvalidTrustMark`] when `iss` is not `issuer`.
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 8.4.2 Trust Mark Status Response
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-8.4.2>
+    pub fn from_verified_jwt(jwt: &str, issuer: &EntityId, issuer_keys: &JwkSet) -> FederationResult<Self> {
+        let response: Self = crate::JwtProcessor::new().verify_jwt_with_jwks(
+            jwt,
+            issuer_keys,
+            JwtArtifactType::TrustMarkStatusResponse,
+        )?;
+        response.validate()?;
+        if response.iss != *issuer {
+            return Err(FederationError::InvalidTrustMark(format!(
+                "the Trust Mark Status Response from {issuer} was issued by {}",
+                response.iss
+            )));
+        }
+        Ok(response)
+    }
+}
+
+/// The checks a Trust Mark and a Trust Mark delegation share: a non-empty `trust_mark_type`, no
+/// additional claim named after one of `claims`, an `iat` not in the future, and an `exp`, if
+/// any, neither in the past nor at or before `iat`. The time checks allow the crate's clock skew.
+fn validate_trust_mark_claims(
+    kind: &str,
+    trust_mark_type: &str,
+    iat: i64,
+    exp: Option<i64>,
+    additional: &HashMap<String, serde_json::Value>,
+    claims: &[&str],
+) -> FederationResult<()> {
+    if trust_mark_type.is_empty() {
+        return Err(FederationError::InvalidTrustMark(format!(
+            "{kind} has an empty trust_mark_type"
+        )));
+    }
+    // A defined claim in `additional` would be serialized next to, or instead of, the typed field.
+    if let Some(name) = additional.keys().find(|name| claims.contains(&name.as_str())) {
+        return Err(FederationError::InvalidTrustMark(format!(
+            "{kind} of type {trust_mark_type}: additional claim {name:?} is a claim the specification defines"
+        )));
+    }
+    let now = chrono::Utc::now().timestamp();
+    if iat > now.saturating_add(CLOCK_SKEW_LEEWAY) {
+        return Err(FederationError::InvalidTrustMark(format!(
+            "{kind} of type {trust_mark_type} is issued in the future"
+        )));
+    }
+    if exp.is_some_and(|exp| exp < now.saturating_sub(CLOCK_SKEW_LEEWAY)) {
+        return Err(FederationError::InvalidTrustMark(format!(
+            "{kind} of type {trust_mark_type} has expired"
+        )));
+    }
+    if exp.is_some_and(|exp| exp <= iat) {
+        return Err(FederationError::InvalidTrustMark(format!(
+            "{kind} of type {trust_mark_type} expires at or before its iat"
+        )));
+    }
+    Ok(())
 }
 
 /// Trusted issuers for each trust mark type.

@@ -211,6 +211,10 @@ impl TimeClaims {
     }
 }
 
+/// The clock skew, in seconds, that the crate's time checks allow: `exp` may lie this far in the
+/// past, and `nbf` and a Trust Mark's `iat` this far in the future.
+pub(crate) const CLOCK_SKEW_LEEWAY: i64 = 60;
+
 /// JWT utilities for federation operations.
 pub struct JwtProcessor {
     /// Default validation settings
@@ -223,7 +227,7 @@ impl JwtProcessor {
         let validation = Validation {
             validate_exp: true,
             validate_nbf: true,
-            leeway: 60, // 60 seconds leeway for clock skew
+            leeway: CLOCK_SKEW_LEEWAY as u64,
             ..Validation::default()
         };
 
@@ -276,6 +280,10 @@ impl JwtProcessor {
     /// * `algorithm` - The expected signing algorithm
     /// * `artifact_type` - The expected federation artifact type
     ///
+    /// `exp` is required unless the processor's validation says otherwise, except for Trust Marks,
+    /// Trust Mark delegations and Trust Mark Status Responses, which may omit it; when present, it
+    /// is checked.
+    ///
     /// # Returns
     /// The decoded claims if verification and typ validation succeed
     pub fn verify_jwt<T: for<'de> Deserialize<'de>>(
@@ -296,7 +304,17 @@ impl JwtProcessor {
         // `arbitrary_precision` feature is enabled anywhere in the build, and then reports `exp` as
         // missing. It only verifies the signature here; `exp` and `nbf` are checked below instead,
         // with the same settings.
-        let time_validation = validation.clone();
+        let mut time_validation = validation.clone();
+        if matches!(
+            artifact_type,
+            JwtArtifactType::TrustMark
+                | JwtArtifactType::TrustMarkDelegation
+                | JwtArtifactType::TrustMarkStatusResponse
+        ) {
+            // A Trust Mark or a delegation without `exp` does not expire (Sections 7.1 and 7.2.1),
+            // and a Trust Mark Status Response has no `exp` (Section 8.4.2).
+            time_validation.required_spec_claims.remove("exp");
+        }
         validation.validate_exp = false;
         validation.validate_nbf = false;
         validation.required_spec_claims.remove("exp");

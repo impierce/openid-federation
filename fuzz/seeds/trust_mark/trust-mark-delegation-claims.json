@@ -1,0 +1,8 @@
+{
+  "sub": "https://tmi.example.org",
+  "trust_mark_type": "https://refeds.org/sirtfi",
+  "iss": "https://tm_owner.example.org",
+  "iat": 1725176302,
+  "ref": "https://refeds.org/sirtfi/terms",
+  "scope": "eduGAIN"
+}
