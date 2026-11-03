@@ -194,7 +194,7 @@ async fn statement_carries_what_the_superior_registered() {
     assert_eq!(response.status, 200);
     assert_eq!(response.content_type, "application/entity-statement+jwt");
     let statement =
-        SubordinateStatement::from_verified_jwt(&response.body, &anchor_id(), &leaf_id(), &anchor_jwks()).unwrap();
+        SubordinateStatement::from_verified_jwt(&response.body, &anchor_id(), &leaf_id(), &anchor_jwks(), &[]).unwrap();
     assert_eq!(statement.jwks, leaf_jwks());
     assert_eq!(statement.source_endpoint.as_deref(), Some(fetch_url().as_str()));
     assert_eq!(
@@ -214,7 +214,8 @@ async fn sub_is_found_with_and_without_a_trailing_slash() {
         let response = endpoint.handle(&EndpointRequest::get(&query)).await;
         assert_eq!(response.status, 200, "{sub}");
         let statement =
-            SubordinateStatement::from_verified_jwt(&response.body, &anchor_id(), &leaf_id(), &anchor_jwks()).unwrap();
+            SubordinateStatement::from_verified_jwt(&response.body, &anchor_id(), &leaf_id(), &anchor_jwks(), &[])
+                .unwrap();
         assert_eq!(
             statement.claims.sub.as_str(),
             "https://op.example.org",

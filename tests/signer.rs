@@ -61,7 +61,7 @@ async fn entity_configuration_signed_through_signer_verifies() {
             .unwrap();
 
         let verified =
-            EntityConfiguration::from_verified_jwt(&jwt, &entity_id).unwrap_or_else(|e| panic!("{alg:?}: {e}"));
+            EntityConfiguration::from_verified_jwt(&jwt, &entity_id, &[]).unwrap_or_else(|e| panic!("{alg:?}: {e}"));
         assert_eq!(verified.claims.sub, entity_id);
         assert_eq!(jsonwebtoken::decode_header(&jwt).unwrap().alg, alg);
     }
@@ -96,7 +96,7 @@ async fn trust_chain_signed_through_signers_validates() {
                 .unwrap(),
         ];
 
-        let chain = TrustChain::try_new(chain).unwrap_or_else(|e| panic!("{alg:?}: {e}"));
+        let chain = TrustChain::try_new(chain, &[]).unwrap_or_else(|e| panic!("{alg:?}: {e}"));
         assert_eq!(chain.trust_anchor_entity_id_and_configuration().unwrap().0, anchor_id);
         assert_eq!(chain.leaf_entity_id_and_configuration().unwrap().0, leaf_id);
     }
@@ -256,7 +256,7 @@ async fn entity_configuration_sign_sets_typ_and_kid() {
             (Some("entity-statement+jwt".to_string()), Some("ta-key".to_string()))
         );
         assert_eq!(
-            EntityConfiguration::from_verified_jwt(&jwt, &entity_id).unwrap(),
+            EntityConfiguration::from_verified_jwt(&jwt, &entity_id, &[]).unwrap(),
             configuration
         );
     }
@@ -283,7 +283,8 @@ async fn subordinate_statement_sign_sets_typ_and_kid() {
             (Some("entity-statement+jwt".to_string()), Some("ta-key".to_string()))
         );
         let verified =
-            SubordinateStatement::from_verified_jwt(&jwt, &anchor_id, &leaf_id, &public_jwks(jwk, "ta-key")).unwrap();
+            SubordinateStatement::from_verified_jwt(&jwt, &anchor_id, &leaf_id, &public_jwks(jwk, "ta-key"), &[])
+                .unwrap();
         assert_eq!(verified, statement);
     }
 }
@@ -562,7 +563,7 @@ async fn federation_entity_endpoints_are_checked_when_signing() {
     configuration.metadata = Some(federation_entity("https://ta.example.org:8443/fetch?tenant=1"));
     let jwt = configuration.sign(&signer).await.unwrap();
     assert_eq!(
-        EntityConfiguration::from_verified_jwt(&jwt, &anchor_id).unwrap(),
+        EntityConfiguration::from_verified_jwt(&jwt, &anchor_id, &[]).unwrap(),
         configuration
     );
 
@@ -576,7 +577,7 @@ async fn federation_entity_endpoints_are_checked_when_signing() {
     statement.metadata = Some(federation_entity("https://op.example.org/fetch"));
     let jwt = statement.sign(&signer).await.unwrap();
     let verified =
-        SubordinateStatement::from_verified_jwt(&jwt, &anchor_id, &leaf_id, &public_jwks(EC_P256_JWK, "ta-key"))
+        SubordinateStatement::from_verified_jwt(&jwt, &anchor_id, &leaf_id, &public_jwks(EC_P256_JWK, "ta-key"), &[])
             .unwrap();
     assert_eq!(verified, statement);
 }

@@ -62,12 +62,16 @@ metadata.federation_entity = Some(FederationEntityMetadata {
 
 config = config.with_metadata(metadata);
 
-// Create and validate trust chains
-let trust_chain = TrustChain::try_new(vec![
-    "entity_config_jwt".to_string(),
-    "intermediate_statement_jwt".to_string(),
-    "trust_anchor_config_jwt".to_string(),
-]);
+// Create and validate trust chains. The second argument lists the extension claims the
+// application understands, which statements may mark critical in `crit` (none here).
+let trust_chain = TrustChain::try_new(
+    vec![
+        "entity_config_jwt".to_string(),
+        "intermediate_statement_jwt".to_string(),
+        "trust_anchor_config_jwt".to_string(),
+    ],
+    &[],
+);
 
 ```
 

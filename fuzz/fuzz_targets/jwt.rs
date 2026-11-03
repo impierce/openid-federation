@@ -36,11 +36,11 @@ fuzz_target!(|data: &[u8]| {
     let _ = extract_claims_unverified::<TrustMark>(input);
 
     let entity = EntityId::parse("https://entity.example").expect("a fixed Entity Identifier parses");
-    let _ = EntityConfiguration::from_verified_jwt(input, &entity);
+    let _ = EntityConfiguration::from_verified_jwt(input, &entity, &[]);
 
     // One statement per line; a chain needs at least a leaf and an anchor.
     let chain: Vec<String> = input.lines().map(str::to_owned).collect();
-    if let Ok(trust_chain) = TrustChain::try_new(chain) {
+    if let Ok(trust_chain) = TrustChain::try_new(chain, &[]) {
         let _ = trust_chain.expiration_timestamp();
         let _ = trust_chain.is_expired();
         let _ = trust_chain.leaf_entity_id_and_configuration();
