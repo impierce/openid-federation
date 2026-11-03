@@ -1,7 +1,7 @@
 //! Metadata structures for OpenID Federation entities.
 
 use crate::jwk::JwkSet;
-use crate::{EntityType, FederationError, FederationResult, UrlValidator};
+use crate::{EntityId, EntityType, FederationError, FederationResult, UrlValidator};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
@@ -188,8 +188,9 @@ impl FederationEntityMetadata {
 /// <https://openid.net/specs/openid-federation-1_0.html#name-openid-provider-metadata>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenIdConnectProviderMetadata {
-    /// Issuer identifier
-    pub issuer: Url,
+    /// Issuer identifier, kept as spelled: OpenID Connect compares it with `iss` as an exact
+    /// string, and a parsed URL would gain a trailing `/` after a bare host.
+    pub issuer: EntityId,
     /// Authorization endpoint
     pub authorization_endpoint: Url,
     /// Token endpoint
@@ -198,8 +199,10 @@ pub struct OpenIdConnectProviderMetadata {
     /// UserInfo endpoint
     #[serde(skip_serializing_if = "Option::is_none")]
     pub userinfo_endpoint: Option<Url>,
-    /// JWK Set URI
-    pub jwks_uri: Url,
+    /// JWK Set URI. Optional: an OP may publish its keys with `jwks` or `signed_jwks_uri`
+    /// instead (Section 5.2.1.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jwks_uri: Option<Url>,
     /// Registration endpoint
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registration_endpoint: Option<Url>,
@@ -299,6 +302,11 @@ pub struct OpenIdConnectProviderMetadata {
     /// Logo URI (federation-specific)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logo_uri: Option<Url>,
+    /// Metadata parameters this struct has no field for, by name. Section 5.1.3 leaves the
+    /// parameters of this Entity Type open, and Section 5.2 adds common ones; they are kept so
+    /// that they survive a round trip and a metadata policy can apply to them.
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
 }
 
 /// OpenID Connect Relying Party metadata.
@@ -396,6 +404,11 @@ pub struct OpenIdConnectRelyingPartyMetadata {
     /// Request URIs
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_uris: Option<Vec<Url>>,
+    /// Metadata parameters this struct has no field for, by name. Section 5.1.2 leaves the
+    /// parameters of this Entity Type open, and Section 5.2 adds common ones; they are kept so
+    /// that they survive a round trip and a metadata policy can apply to them.
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
 }
 
 /// OAuth Authorization Server metadata.
@@ -404,8 +417,9 @@ pub struct OpenIdConnectRelyingPartyMetadata {
 /// <https://openid.net/specs/openid-federation-1_0.html#name-oauth-authorization-server->
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OauthAuthorizationServerMetadata {
-    /// Issuer identifier
-    pub issuer: Url,
+    /// Issuer identifier, kept as spelled. It MUST match the Entity Identifier (Section 5.1.4),
+    /// and a parsed URL would gain a trailing `/` after a bare host.
+    pub issuer: EntityId,
     /// Authorization endpoint
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization_endpoint: Option<Url>,
@@ -469,6 +483,11 @@ pub struct OauthAuthorizationServerMetadata {
     /// Supported code challenge methods
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_challenge_methods_supported: Option<Vec<String>>,
+    /// Metadata parameters this struct has no field for, by name. Section 5.1.4 leaves the
+    /// parameters of this Entity Type open, and Section 5.2 adds common ones; they are kept so
+    /// that they survive a round trip and a metadata policy can apply to them.
+    #[serde(flatten)]
+    pub additional: HashMap<String, serde_json::Value>,
 }
 
 /// Comprehensive metadata structure that can contain metadata for any entity type.

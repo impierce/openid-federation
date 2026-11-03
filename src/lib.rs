@@ -749,11 +749,11 @@ mod tests {
 
         let mut metadata = EntityMetadata::new();
         metadata.openid_provider = Some(OpenIdConnectProviderMetadata {
-            issuer: Url::parse(&format!("{}/openid", op_url)).unwrap(),
+            issuer: EntityId::parse(&format!("{}/openid", op_url)).unwrap(),
             authorization_endpoint: Url::parse(&format!("{}/openid/authorization", op_url)).unwrap(),
             token_endpoint: Some(Url::parse(&format!("{}/openid/token", op_url)).unwrap()),
             userinfo_endpoint: None,
-            jwks_uri: Url::parse(&format!("{}/openid/jwks.jose", op_url)).unwrap(),
+            jwks_uri: Some(Url::parse(&format!("{}/openid/jwks.jose", op_url)).unwrap()),
             registration_endpoint: None,
             scopes_supported: None,
             response_types_supported: vec!["code".to_string(), "code id_token".to_string(), "token".to_string()],
@@ -809,6 +809,7 @@ mod tests {
                 ))
                 .unwrap(),
             ),
+            additional: Default::default(),
         });
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
@@ -944,11 +945,11 @@ mod tests {
 
         let mut metadata = EntityMetadata::new();
         metadata.openid_provider = Some(OpenIdConnectProviderMetadata {
-            issuer: entity_id.as_url().clone(),
+            issuer: entity_id.clone(),
             authorization_endpoint: Url::parse(&format!("{}/auth", op_url)).unwrap(),
             token_endpoint: Some(Url::parse(&format!("{}/token", op_url)).unwrap()),
             userinfo_endpoint: Some(Url::parse(&format!("{}/userinfo", op_url)).unwrap()),
-            jwks_uri: Url::parse(&format!("{}/jwks", op_url)).unwrap(),
+            jwks_uri: Some(Url::parse(&format!("{}/jwks", op_url)).unwrap()),
             registration_endpoint: Some(Url::parse(&format!("{}/register", op_url)).unwrap()),
             scopes_supported: Some(vec!["openid".to_string(), "profile".to_string(), "email".to_string()]),
             response_types_supported: vec!["code".to_string()],
@@ -986,6 +987,7 @@ mod tests {
             client_registration_types_supported: None,
             federation_registration_endpoint: None,
             logo_uri: None,
+            additional: Default::default(),
         });
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
@@ -1033,6 +1035,7 @@ mod tests {
             default_acr_values: None,
             initiate_login_uri: Some(Url::parse(&format!("{}/login", client_url)).unwrap()),
             request_uris: Some(vec![Url::parse(&format!("{}/request", client_url)).unwrap()]),
+            additional: Default::default(),
         });
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
