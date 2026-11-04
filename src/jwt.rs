@@ -80,6 +80,81 @@ impl JwtArtifactType {
     }
 }
 
+/// A `typ` an application defines for its own federation artifacts, such as a signed list it
+/// serves at an endpoint its `federation_entity` metadata advertises. It must not be the `typ` of
+/// one of the specification's artifacts, written with or without the `application/` prefix and
+/// in any case (RFC 7515 Section 4.1.9), so it cannot produce or accept one of them without the
+/// checks [`JwtArtifactType`] brings.
+fn application_typ(typ: &str) -> FederationResult<&str> {
+    const ARTIFACTS: [JwtArtifactType; 7] = [
+        JwtArtifactType::EntityStatement,
+        JwtArtifactType::TrustMark,
+        JwtArtifactType::ResolveResponse,
+        JwtArtifactType::ExplicitRegistrationResponse,
+        JwtArtifactType::SignedJwkSet,
+        JwtArtifactType::TrustMarkDelegation,
+        JwtArtifactType::TrustMarkStatusResponse,
+    ];
+    if typ.is_empty() {
+        return Err(FederationError::Configuration(
+            "an application typ must not be empty".to_string(),
+        ));
+    }
+    let lowercase = typ.to_ascii_lowercase();
+    let media_type = lowercase.strip_prefix("application/").unwrap_or(&lowercase);
+    if let Some(artifact) = ARTIFACTS.iter().find(|artifact| artifact.header_value() == media_type) {
+        return Err(FederationError::Configuration(format!(
+            "typ {typ:?} is the typ of the specification's {artifact:?} artifact; use JwtArtifactType::{artifact:?}"
+        )));
+    }
+    Ok(typ)
+}
+
+/// The `typ` a JWT is signed or verified under: one of the specification's artifacts, or an
+/// application's own (checked by [`application_typ`]).
+#[derive(Clone, Copy)]
+enum ExpectedTyp<'a> {
+    Artifact(JwtArtifactType),
+    Application(&'a str),
+}
+
+impl ExpectedTyp<'_> {
+    fn header_value(&self) -> &str {
+        match self {
+            Self::Artifact(artifact_type) => artifact_type.header_value(),
+            Self::Application(typ) => typ,
+        }
+    }
+
+    fn validate_header_typ(&self, header_typ: Option<&str>) -> FederationResult<()> {
+        match self {
+            Self::Artifact(artifact_type) => artifact_type.validate_header_typ(header_typ),
+            Self::Application(expected) => match header_typ {
+                Some(actual) if actual == *expected => Ok(()),
+                Some(actual) => Err(FederationError::InvalidJwtHeaderTyp(format!(
+                    "JWT 'typ' mismatch: expected '{expected}', got '{actual}'"
+                ))),
+                None => Err(FederationError::InvalidJwtHeaderTyp(format!(
+                    "JWT header missing required 'typ' claim (expected: {expected})"
+                ))),
+            },
+        }
+    }
+
+    /// Whether the artifact may omit `exp`: Trust Marks and delegations without `exp` do not
+    /// expire (Sections 7.1 and 7.2.1), and a Trust Mark Status Response has none (Section 8.4.2).
+    fn exp_optional(&self) -> bool {
+        matches!(
+            self,
+            Self::Artifact(
+                JwtArtifactType::TrustMark
+                    | JwtArtifactType::TrustMarkDelegation
+                    | JwtArtifactType::TrustMarkStatusResponse
+            )
+        )
+    }
+}
+
 /// JWT Header with federation-specific extensions.
 ///
 /// Reference: OpenID Federation 1.0 - Section 3.1.3 Entity Statement Format
@@ -273,10 +348,54 @@ impl JwtProcessor {
         artifact_type: JwtArtifactType,
         kid: Option<String>,
     ) -> FederationResult<String> {
+        self.sign(claims, key, algorithm, ExpectedTyp::Artifact(artifact_type), kid)
+    }
+
+    /// [`sign_jwt`](Self::sign_jwt) under `typ`, a `typ` the application defines for its own
+    /// federation artifacts, such as `example-list+jwt`.
+    ///
+    /// A Federation Entity Key SHOULD NOT be used in other protocols (Section 3.1.1). Signing an
+    /// application's own federation artifacts with it is the application's decision; the explicit
+    /// `typ` is what keeps them apart from the specification's artifacts and from each other.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::Configuration`] when `typ` is empty or is the `typ` of one of the
+    /// specification's artifacts, for which [`sign_jwt`](Self::sign_jwt) and its
+    /// [`JwtArtifactType`] apply; and the errors of [`sign_jwt`](Self::sign_jwt).
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 3.1.1
+    /// (<https://openid.net/specs/openid-federation-1_0.html#section-3.1.1>) and RFC 8725
+    /// Section 3.11 (<https://www.rfc-editor.org/rfc/rfc8725#section-3.11>)
+    pub fn sign_jwt_with_typ<T: Serialize>(
+        &self,
+        claims: &T,
+        key: &EncodingKey,
+        algorithm: Algorithm,
+        typ: &str,
+        kid: Option<String>,
+    ) -> FederationResult<String> {
+        self.sign(
+            claims,
+            key,
+            algorithm,
+            ExpectedTyp::Application(application_typ(typ)?),
+            kid,
+        )
+    }
+
+    fn sign<T: Serialize>(
+        &self,
+        claims: &T,
+        key: &EncodingKey,
+        algorithm: Algorithm,
+        typ: ExpectedTyp<'_>,
+        kid: Option<String>,
+    ) -> FederationResult<String> {
         let mut header = Header::new(algorithm);
         header.kid = kid;
         // Set the federation-specific typ header (not the generic "JWT" value)
-        header.typ = Some(artifact_type.header_value().to_string());
+        header.typ = Some(typ.header_value().to_string());
 
         encode(&header, claims, key).map_err(FederationError::from)
     }
@@ -305,9 +424,38 @@ impl JwtProcessor {
         algorithm: Algorithm,
         artifact_type: JwtArtifactType,
     ) -> FederationResult<T> {
+        self.verify(token, key, algorithm, ExpectedTyp::Artifact(artifact_type))
+    }
+
+    /// [`verify_jwt`](Self::verify_jwt) for a JWT under `typ`, a `typ` the application defines
+    /// for its own federation artifacts. `exp` is required unless the processor's validation says
+    /// otherwise, and is checked with `nbf` and `iat` as for the specification's artifacts.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::Configuration`] when `typ` is empty or is the `typ` of one of the
+    /// specification's artifacts, and the errors of [`verify_jwt`](Self::verify_jwt), among them
+    /// [`FederationError::InvalidJwtHeaderTyp`] when the header's `typ` is not exactly `typ`.
+    pub fn verify_jwt_with_typ<T: for<'de> Deserialize<'de>>(
+        &self,
+        token: &str,
+        key: &DecodingKey,
+        algorithm: Algorithm,
+        typ: &str,
+    ) -> FederationResult<T> {
+        self.verify(token, key, algorithm, ExpectedTyp::Application(application_typ(typ)?))
+    }
+
+    fn verify<T: for<'de> Deserialize<'de>>(
+        &self,
+        token: &str,
+        key: &DecodingKey,
+        algorithm: Algorithm,
+        typ: ExpectedTyp<'_>,
+    ) -> FederationResult<T> {
         // First validate the typ header before decoding
         let header = jsonwebtoken::decode_header(token)?;
-        artifact_type.validate_header_typ(header.typ.as_deref())?;
+        typ.validate_header_typ(header.typ.as_deref())?;
 
         let mut validation = self.validation.clone();
         validation.algorithms = vec![algorithm];
@@ -317,14 +465,7 @@ impl JwtProcessor {
         // missing. It only verifies the signature here; `exp` and `nbf` are checked below instead,
         // with the same settings.
         let mut time_validation = validation.clone();
-        if matches!(
-            artifact_type,
-            JwtArtifactType::TrustMark
-                | JwtArtifactType::TrustMarkDelegation
-                | JwtArtifactType::TrustMarkStatusResponse
-        ) {
-            // A Trust Mark or a delegation without `exp` does not expire (Sections 7.1 and 7.2.1),
-            // and a Trust Mark Status Response has no `exp` (Section 8.4.2).
+        if typ.exp_optional() {
             time_validation.required_spec_claims.remove("exp");
         }
         validation.validate_exp = false;
@@ -368,9 +509,36 @@ impl JwtProcessor {
         jwks: &JwkSet,
         artifact_type: JwtArtifactType,
     ) -> FederationResult<T> {
+        self.verify_with_jwks(token, jwks, ExpectedTyp::Artifact(artifact_type))
+    }
+
+    /// [`verify_jwt_with_jwks`](Self::verify_jwt_with_jwks) for a JWT under `typ`, a `typ` the
+    /// application defines for its own federation artifacts, such as a signed list verified
+    /// against its issuer's `jwks`.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::Configuration`] when `typ` is empty or is the `typ` of one of the
+    /// specification's artifacts, and the errors of
+    /// [`verify_jwt_with_jwks`](Self::verify_jwt_with_jwks).
+    pub fn verify_jwt_with_jwks_typ<T: for<'de> Deserialize<'de>>(
+        &self,
+        token: &str,
+        jwks: &JwkSet,
+        typ: &str,
+    ) -> FederationResult<T> {
+        self.verify_with_jwks(token, jwks, ExpectedTyp::Application(application_typ(typ)?))
+    }
+
+    fn verify_with_jwks<T: for<'de> Deserialize<'de>>(
+        &self,
+        token: &str,
+        jwks: &JwkSet,
+        typ: ExpectedTyp<'_>,
+    ) -> FederationResult<T> {
         // First validate the typ header before attempting key verification
         let header = jsonwebtoken::decode_header(token)?;
-        artifact_type.validate_header_typ(header.typ.as_deref())?;
+        typ.validate_header_typ(header.typ.as_deref())?;
 
         let kid = match header.kid.as_deref() {
             None => {
@@ -392,7 +560,7 @@ impl JwtProcessor {
             .ok_or_else(|| {
                 FederationError::InvalidSubordinateStatement(format!("no key in the jwks has the kid {kid:?}"))
             })?;
-        self.verify_jwt(token, &jwk.to_decoding_key()?, header.alg, artifact_type)
+        self.verify(token, &jwk.to_decoding_key()?, header.alg, typ)
     }
 }
 
@@ -520,6 +688,41 @@ pub async fn sign_federation_jwt<T: Serialize + ?Sized>(
     artifact_type: JwtArtifactType,
     signer: &dyn Signer,
 ) -> FederationResult<String> {
+    sign_with_federation_key(claims, ExpectedTyp::Artifact(artifact_type), signer).await
+}
+
+/// [`sign_federation_jwt`] under `typ`, a `typ` the application defines for its own federation
+/// artifacts, such as a signed list it serves at an endpoint its `federation_entity` metadata
+/// advertises. The artifact gets the same header and checks as the specification's: `kid` names
+/// the signer's key, the key is asymmetric, and each claim is named once.
+///
+/// A Federation Entity Key SHOULD NOT be used in other protocols (Section 3.1.1). Signing an
+/// application's own federation artifacts with it is the application's decision; the explicit
+/// `typ` is what keeps them apart from the specification's artifacts and from each other.
+/// [`JwtProcessor::verify_jwt_with_jwks_typ`] verifies them.
+///
+/// # Errors
+///
+/// [`FederationError::Configuration`] when `typ` is empty or is the `typ` of one of the
+/// specification's artifacts, for which [`sign_federation_jwt`] and its [`JwtArtifactType`]
+/// apply; and the errors of [`sign_federation_jwt`].
+///
+/// Reference: OpenID Federation 1.0 - Section 3.1.1
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-3.1.1>) and RFC 8725 Section 3.11
+/// (<https://www.rfc-editor.org/rfc/rfc8725#section-3.11>)
+pub async fn sign_federation_jwt_with_typ<T: Serialize + ?Sized>(
+    claims: &T,
+    typ: &str,
+    signer: &dyn Signer,
+) -> FederationResult<String> {
+    sign_with_federation_key(claims, ExpectedTyp::Application(application_typ(typ)?), signer).await
+}
+
+async fn sign_with_federation_key<T: Serialize + ?Sized>(
+    claims: &T,
+    typ: ExpectedTyp<'_>,
+    signer: &dyn Signer,
+) -> FederationResult<String> {
     if signer.kid().is_empty() {
         return Err(FederationError::Configuration(
             "a federation artifact must name its signing key, but the signer's kid is empty".to_string(),
@@ -535,7 +738,7 @@ pub async fn sign_federation_jwt<T: Serialize + ?Sized>(
     let payload = serde_json::to_vec(claims)?;
     unique_top_level_members(&payload)?;
     let mut header = Header::new(signer.alg());
-    header.typ = Some(artifact_type.header_value().to_string());
+    header.typ = Some(typ.header_value().to_string());
     header.kid = Some(signer.kid().to_string());
     sign_payload(&header, &payload, signer).await
 }
