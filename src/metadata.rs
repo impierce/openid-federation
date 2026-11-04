@@ -692,6 +692,26 @@ pub struct EntityMetadata {
 }
 
 impl EntityMetadata {
+    /// Runs `validate` on each typed Entity Type member: `federation_entity`, `openid_provider`,
+    /// `openid_relying_party` and `oauth_authorization_server`. Each refuses an `additional`
+    /// member that repeats one of its typed parameters, which would appear twice in signed JSON
+    /// or, once serialized, replace the typed value.
+    pub(crate) fn validate_typed_members(&self) -> FederationResult<()> {
+        if let Some(federation_entity) = &self.federation_entity {
+            federation_entity.validate()?;
+        }
+        if let Some(openid_provider) = &self.openid_provider {
+            openid_provider.validate()?;
+        }
+        if let Some(openid_relying_party) = &self.openid_relying_party {
+            openid_relying_party.validate()?;
+        }
+        if let Some(oauth_authorization_server) = &self.oauth_authorization_server {
+            oauth_authorization_server.validate()?;
+        }
+        Ok(())
+    }
+
     /// Create a new empty EntityMetadata.
     pub fn new() -> Self {
         Self {

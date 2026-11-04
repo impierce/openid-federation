@@ -187,23 +187,107 @@ fn essential_client_registration_types_passes_when_published() {
     );
 }
 
-/// A typed parameter repeated in `additional` would replace the typed field once the metadata
-/// is serialized, so applying a policy refuses it.
+/// Metadata of `entity_type` with every required parameter, and `parameter` set to `value` in
+/// its `additional` map only, as code can do and parsing cannot.
+fn with_typed_name_in_additional(entity_type: &str, parameter: &str, value: Value) -> EntityMetadata {
+    let member = match entity_type {
+        "federation_entity" => json!({ "federation_fetch_endpoint": "https://ta.example.org/fetch" }),
+        "openid_provider" => json!({
+            "issuer": "https://op.example.org",
+            "authorization_endpoint": "https://op.example.org/authorize",
+            "response_types_supported": ["code"],
+            "subject_types_supported": ["pairwise"],
+            "id_token_signing_alg_values_supported": ["ES256"]
+        }),
+        "openid_relying_party" => json!({ "redirect_uris": ["https://rp.example.org/callback"] }),
+        "oauth_authorization_server" => json!({ "issuer": "https://as.example.org" }),
+        other => panic!("{other}"),
+    };
+    let mut metadata = json!({ entity_type: member });
+    metadata[entity_type]["additional_marker"] = json!(true);
+    let mut metadata: EntityMetadata = serde_json::from_value(metadata).unwrap();
+    let additional = match entity_type {
+        "federation_entity" => &mut metadata.federation_entity.as_mut().unwrap().additional,
+        "openid_provider" => &mut metadata.openid_provider.as_mut().unwrap().additional,
+        "openid_relying_party" => &mut metadata.openid_relying_party.as_mut().unwrap().additional,
+        _ => &mut metadata.oauth_authorization_server.as_mut().unwrap().additional,
+    };
+    additional.remove("additional_marker");
+    additional.insert(parameter.to_string(), value);
+    metadata
+}
+
+/// A typed parameter repeated in `additional` would replace the typed value once the metadata is
+/// serialized, so applying a policy refuses it for every typed Entity Type, whatever the policy.
 #[test]
 fn applying_a_policy_refuses_a_typed_parameter_in_additional() {
-    let mut rp = relying_party();
-    rp.openid_relying_party.as_mut().unwrap().additional.insert(
-        "redirect_uris".to_string(),
-        json!(["https://other.example.org/callback"]),
-    );
-    let error = apply_metadata_policy(&rp, &MetadataPolicy::new()).unwrap_err();
+    for (entity_type, parameter, value) in [
+        (
+            "federation_entity",
+            "federation_fetch_endpoint",
+            json!("https://other.example.org/fetch"),
+        ),
+        ("openid_provider", "issuer", json!("https://other.example.org")),
+        (
+            "openid_relying_party",
+            "redirect_uris",
+            json!(["https://other.example.org/callback"]),
+        ),
+        (
+            "oauth_authorization_server",
+            "token_endpoint",
+            json!("https://other.example.org/token"),
+        ),
+    ] {
+        let metadata = with_typed_name_in_additional(entity_type, parameter, value);
+        let policies: [MetadataPolicy; 2] = [
+            MetadataPolicy::new(),
+            serde_json::from_value(json!({ entity_type: { parameter: { "essential": true } } })).unwrap(),
+        ];
+        for policy in policies {
+            let error = apply_metadata_policy(&metadata, &policy).unwrap_err();
+            assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("{parameter} is a typed {entity_type} parameter")),
+                "{entity_type}: {error}"
+            );
+        }
+    }
+}
+
+/// An `additional` map that holds only names the struct has no field for keeps applying.
+#[test]
+fn applying_a_policy_keeps_unknown_names_in_additional() {
+    for (entity_type, parameter) in [
+        ("federation_entity", "example_extension"),
+        ("openid_provider", "organization_name"),
+        ("openid_relying_party", "client_registration_types"),
+        ("oauth_authorization_server", "dpop_signing_alg_values_supported"),
+    ] {
+        let metadata = with_typed_name_in_additional(entity_type, parameter, json!(["x"]));
+        let resolved = apply_metadata_policy(&metadata, &MetadataPolicy::new()).unwrap();
+        let resolved = serde_json::to_value(&resolved).unwrap();
+        assert_eq!(resolved[entity_type][parameter], json!(["x"]), "{entity_type}");
+    }
+}
+
+/// Typed metadata is checked before the policy runs, so an `http` endpoint is refused even when
+/// the policy would replace it with an `https` one.
+#[test]
+fn applying_a_policy_refuses_an_http_endpoint_the_policy_would_replace() {
+    let metadata: EntityMetadata = serde_json::from_value(json!({
+        "federation_entity": { "federation_fetch_endpoint": "http://ta.example.org/fetch" }
+    }))
+    .unwrap();
+    let policy: MetadataPolicy = serde_json::from_value(json!({
+        "federation_entity": { "federation_fetch_endpoint": { "value": "https://ta.example.org/fetch" } }
+    }))
+    .unwrap();
+    let error = apply_metadata_policy(&metadata, &policy).unwrap_err();
     assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
-    assert!(
-        error
-            .to_string()
-            .contains("redirect_uris is a typed openid_relying_party parameter"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("federation_fetch_endpoint"), "{error}");
 }
 
 const ED25519_DER: &[u8] = include_bytes!("data/signer/ed25519.pkcs8.der");
