@@ -187,6 +187,25 @@ fn essential_client_registration_types_passes_when_published() {
     );
 }
 
+/// A typed parameter repeated in `additional` would replace the typed field once the metadata
+/// is serialized, so applying a policy refuses it.
+#[test]
+fn applying_a_policy_refuses_a_typed_parameter_in_additional() {
+    let mut rp = relying_party();
+    rp.openid_relying_party.as_mut().unwrap().additional.insert(
+        "redirect_uris".to_string(),
+        json!(["https://other.example.org/callback"]),
+    );
+    let error = apply_metadata_policy(&rp, &MetadataPolicy::new()).unwrap_err();
+    assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("redirect_uris is a typed openid_relying_party parameter"),
+        "{error}"
+    );
+}
+
 const ED25519_DER: &[u8] = include_bytes!("data/signer/ed25519.pkcs8.der");
 const ED25519_JWK: &str = include_str!("data/signer/ed25519.public.jwk.json");
 
@@ -205,7 +224,14 @@ async fn signing_refuses_a_typed_parameter_in_additional() {
     let mut metadata: EntityMetadata = serde_json::from_value(json!({ "openid_provider": figure_69() })).unwrap();
     let mut configuration = EntityConfiguration::new(op.clone(), jwks.clone(), now + 3600, now);
     configuration.metadata = Some(metadata.clone());
-    configuration.sign(&signer).await.unwrap();
+    let jwt = configuration.sign(&signer).await.unwrap();
+    let signed = EntityConfiguration::from_verified_jwt(&jwt, &op, &[]).unwrap();
+    let signed = signed.metadata.unwrap().openid_provider.unwrap();
+    assert_eq!(
+        signed.additional.get("organization_name"),
+        Some(&json!("University of Umeå"))
+    );
+    assert_eq!(signed.issuer.as_str(), "https://op.umu.se");
 
     metadata
         .openid_provider
