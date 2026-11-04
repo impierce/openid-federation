@@ -44,7 +44,7 @@ fn endpoints(fetch: bool, list: bool) -> EntityMetadata {
 /// Superiors.
 fn anchor() -> EntityConfiguration {
     let mut configuration = EntityConfiguration::new(anchor_id(), jwks("ta-key"), now() + 3600, now());
-    configuration.metadata = Some(endpoints(true, true));
+    configuration.metadata = Some(endpoints(true, true).try_into().unwrap());
     configuration
 }
 
@@ -60,7 +60,7 @@ fn trust_anchor_without_fetch_or_list_endpoint_fails() {
         (true, false, "federation_list_endpoint"),
     ] {
         let mut configuration = anchor();
-        configuration.metadata = Some(endpoints(fetch, list));
+        configuration.metadata = Some(endpoints(fetch, list).try_into().unwrap());
         let error = configuration.validate_as_trust_anchor(false).unwrap_err();
         assert!(error.to_string().contains(missing), "{error}");
     }
@@ -99,13 +99,13 @@ fn trust_anchor_with_superiors_names_them() {
 fn intermediate_names_its_superiors_and_publishes_both_endpoints() {
     let id = EntityId::parse("https://intermediate.example.org").unwrap();
     let mut configuration = EntityConfiguration::new(id, jwks("int-key"), now() + 3600, now());
-    configuration.metadata = Some(endpoints(true, true));
+    configuration.metadata = Some(endpoints(true, true).try_into().unwrap());
     assert!(configuration.validate_as_intermediate().is_err(), "no authority_hints");
 
     configuration.authority_hints = Some(vec![anchor_id()]);
     configuration.validate_as_intermediate().unwrap();
 
-    configuration.metadata = Some(endpoints(true, false));
+    configuration.metadata = Some(endpoints(true, false).try_into().unwrap());
     let error = configuration.validate_as_intermediate().unwrap_err();
     assert!(error.to_string().contains("federation_list_endpoint"), "{error}");
 }

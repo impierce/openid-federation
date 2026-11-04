@@ -514,7 +514,7 @@ impl FederationClient {
                 let fetch_endpoint = superior_config
                     .metadata
                     .as_ref()
-                    .and_then(|m| m.federation_entity.as_ref())
+                    .and_then(|m| m.federation_entity())
                     .and_then(|f| f.federation_fetch_endpoint.clone())
                     .ok_or_else(|| {
                         FederationError::EntityResolution(format!(
@@ -641,7 +641,7 @@ impl FederationClient {
                     let fetch_endpoint = match superior_config
                         .metadata
                         .as_ref()
-                        .and_then(|m| m.federation_entity.as_ref())
+                        .and_then(|m| m.federation_entity())
                         .and_then(|f| f.federation_fetch_endpoint.clone())
                     {
                         Some(endpoint) => endpoint,

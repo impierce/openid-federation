@@ -71,7 +71,7 @@ fn configuration(candidate: &EntityId, authority_hints: Vec<EntityId>, intermedi
     }
     EntityConfiguration::new(candidate.clone(), candidate_jwks(), now() + 3600, now())
         .with_authority_hints(authority_hints)
-        .with_metadata(metadata)
+        .with_metadata(metadata.try_into().unwrap())
 }
 
 /// A metadata policy that the Superior applies to its OpenID Providers.

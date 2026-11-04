@@ -78,7 +78,7 @@ fn anchor(issuers: &[(&str, &[&str])], owned: bool) -> EntityConfiguration {
         federation_fetch_endpoint: Some(Url::parse(&format!("{ANCHOR}/fetch")).unwrap()),
         ..Default::default()
     });
-    anchor.metadata = Some(metadata);
+    anchor.metadata = Some(metadata.try_into().unwrap());
     anchor.trust_mark_issuers = Some(TrustMarkIssuers {
         by_type: issuers
             .iter()
@@ -631,7 +631,8 @@ async fn chain_keeps_the_trust_marks_of_its_leaf_that_verify() {
         .await
         .unwrap();
     assert_eq!(
-        chain.trust_marks, None,
+        chain.trust_marks(),
+        None,
         "discovery does not verify Trust Marks by itself"
     );
 
@@ -659,7 +660,7 @@ async fn chain_keeps_the_trust_marks_of_its_leaf_that_verify() {
         before.1,
         "the leaf's own Trust Mark uses the keys the chain endorses"
     );
-    let verified = chain.trust_marks.unwrap();
+    let verified = chain.trust_marks().unwrap();
     assert_eq!(verified.len(), 2);
     assert!(verified[0].delegation.is_some());
     assert_eq!(verified[1].trust_mark_type, SELF_ISSUED);

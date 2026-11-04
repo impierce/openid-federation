@@ -692,6 +692,40 @@ pub struct EntityMetadata {
 }
 
 impl EntityMetadata {
+    /// Refuses an `additional` member of a typed Entity Type that repeats one of its typed
+    /// parameters. Serialized, it would replace the typed value.
+    pub(crate) fn reject_typed_parameters_in_additional(&self) -> FederationResult<()> {
+        if let Some(federation_entity) = &self.federation_entity {
+            reject_typed_parameters_in_additional(
+                "federation_entity",
+                &FEDERATION_ENTITY_PARAMETERS,
+                &federation_entity.additional,
+            )?;
+        }
+        if let Some(openid_provider) = &self.openid_provider {
+            reject_typed_parameters_in_additional(
+                "openid_provider",
+                &OPENID_PROVIDER_PARAMETERS,
+                &openid_provider.additional,
+            )?;
+        }
+        if let Some(openid_relying_party) = &self.openid_relying_party {
+            reject_typed_parameters_in_additional(
+                "openid_relying_party",
+                &OPENID_RELYING_PARTY_PARAMETERS,
+                &openid_relying_party.additional,
+            )?;
+        }
+        if let Some(oauth_authorization_server) = &self.oauth_authorization_server {
+            reject_typed_parameters_in_additional(
+                "oauth_authorization_server",
+                &OAUTH_AUTHORIZATION_SERVER_PARAMETERS,
+                &oauth_authorization_server.additional,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Runs `validate` on each typed Entity Type member: `federation_entity`, `openid_provider`,
     /// `openid_relying_party` and `oauth_authorization_server`. Each refuses an `additional`
     /// member that repeats one of its typed parameters, which would appear twice in signed JSON
@@ -775,6 +809,204 @@ impl EntityMetadata {
 impl Default for EntityMetadata {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The `metadata` claim of an Entity Statement: per Entity Type, the metadata parameters the
+/// statement states (Section 3.1.1).
+///
+/// A member need not hold every parameter its Entity Type requires. An Entity Configuration may
+/// publish `{}` for an Entity Type whose Immediate Superior supplies the parameters, and a
+/// Subordinate Statement may state only some parameters, which override the subject's own. Only
+/// the Resolved Metadata of a Trust Chain, [`TrustChain::metadata`](crate::TrustChain::metadata),
+/// is complete [`EntityMetadata`].
+///
+/// `federation_entity` is held as [`FederationEntityMetadata`], since all its parameters are
+/// optional and discovery reads its endpoints. Every other member is held as the JSON object it
+/// is; [`to_entity_metadata`](Self::to_entity_metadata) reads them as their types.
+///
+/// Reference: OpenID Federation 1.0 - Section 3.1.1
+/// <https://openid.net/specs/openid-federation-1_0.html#section-3.1.1>
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct StatementMetadata {
+    federation_entity: Option<FederationEntityMetadata>,
+    others: std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+}
+
+impl StatementMetadata {
+    /// Metadata without any Entity Type.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Reads the members of a `metadata` claim. Each must be a JSON object, and
+    /// `federation_entity` must read as [`FederationEntityMetadata`].
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidMetadata`] naming the member that is not a JSON object or the
+    /// `federation_entity` parameter that does not fit its type.
+    pub fn from_json(members: serde_json::Map<String, serde_json::Value>) -> FederationResult<Self> {
+        let mut metadata = Self::new();
+        for (entity_type, parameters) in members {
+            let serde_json::Value::Object(parameters) = parameters else {
+                return Err(FederationError::InvalidMetadata(format!(
+                    "the metadata of {entity_type} is not a JSON object"
+                )));
+            };
+            metadata = metadata.with_entity_type(&entity_type, parameters)?;
+        }
+        Ok(metadata)
+    }
+
+    /// Sets the parameters of `entity_type`, replacing any it had.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidMetadata`] when `entity_type` is `federation_entity` and
+    /// `parameters` do not read as [`FederationEntityMetadata`].
+    pub fn with_entity_type(
+        mut self,
+        entity_type: &str,
+        parameters: serde_json::Map<String, serde_json::Value>,
+    ) -> FederationResult<Self> {
+        if entity_type == "federation_entity" {
+            let federation_entity = serde_json::from_value(serde_json::Value::Object(parameters))
+                .map_err(|error| FederationError::InvalidMetadata(format!("federation_entity: {error}")))?;
+            self.federation_entity = Some(federation_entity);
+        } else {
+            self.others.insert(entity_type.to_string(), parameters);
+        }
+        Ok(self)
+    }
+
+    /// Sets the `federation_entity` metadata.
+    pub fn with_federation_entity(mut self, federation_entity: FederationEntityMetadata) -> Self {
+        self.federation_entity = Some(federation_entity);
+        self
+    }
+
+    /// The `federation_entity` metadata, if the statement has it.
+    pub fn federation_entity(&self) -> Option<&FederationEntityMetadata> {
+        self.federation_entity.as_ref()
+    }
+
+    /// The parameters stated for `entity_type`, if any.
+    pub fn parameters(&self, entity_type: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+        if entity_type == "federation_entity" {
+            return self.federation_entity.as_ref().map(federation_entity_json);
+        }
+        self.others.get(entity_type).cloned()
+    }
+
+    /// Whether the statement has a member for `entity_type`.
+    pub fn has_entity_type(&self, entity_type: &EntityType) -> bool {
+        match entity_type {
+            EntityType::FederationEntity => self.federation_entity.is_some(),
+            other => self.others.contains_key(&entity_type_identifier(other)),
+        }
+    }
+
+    /// The Entity Types the statement has a member for, the standard ones first, in the order of
+    /// Section 5.1, then the others by name.
+    pub fn entity_types(&self) -> Vec<EntityType> {
+        let standard = [
+            EntityType::FederationEntity,
+            EntityType::OpenIdRelyingParty,
+            EntityType::OpenIdProvider,
+            EntityType::OauthAuthorizationServer,
+            EntityType::OauthClient,
+            EntityType::OauthResource,
+        ];
+        let standard_names: Vec<String> = standard.iter().map(entity_type_identifier).collect();
+        let others = self
+            .others
+            .keys()
+            .filter(|name| !standard_names.contains(name))
+            .map(|name| EntityType::Other(name.clone()));
+        standard
+            .iter()
+            .filter(|entity_type| self.has_entity_type(entity_type))
+            .cloned()
+            .chain(others)
+            .collect()
+    }
+
+    /// The metadata as a JSON object, one member per Entity Type.
+    pub fn to_json(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut json = serde_json::Map::new();
+        if let Some(federation_entity) = &self.federation_entity {
+            json.insert(
+                "federation_entity".to_string(),
+                serde_json::Value::Object(federation_entity_json(federation_entity)),
+            );
+        }
+        for (entity_type, parameters) in &self.others {
+            json.insert(entity_type.clone(), serde_json::Value::Object(parameters.clone()));
+        }
+        json
+    }
+
+    /// Reads every member as its Entity Type's metadata.
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidMetadata`] when a member does not fit its type, for example
+    /// `openid_relying_party` metadata without `redirect_uris`, which a Subordinate Statement
+    /// or an Entity Configuration whose Superior supplies it may well state.
+    pub fn to_entity_metadata(&self) -> FederationResult<EntityMetadata> {
+        serde_json::from_value(serde_json::Value::Object(self.to_json()))
+            .map_err(|error| FederationError::InvalidMetadata(format!("the metadata is not complete: {error}")))
+    }
+}
+
+/// `federation_entity` metadata as a JSON object.
+fn federation_entity_json(federation_entity: &FederationEntityMetadata) -> serde_json::Map<String, serde_json::Value> {
+    match serde_json::to_value(federation_entity) {
+        Ok(serde_json::Value::Object(json)) => json,
+        // A struct of optional fields and a map always serializes to an object.
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// The Entity Type Identifier of `entity_type`, such as `openid_provider`.
+pub(crate) fn entity_type_identifier(entity_type: &EntityType) -> String {
+    match serde_json::to_value(entity_type) {
+        Ok(serde_json::Value::String(identifier)) => identifier,
+        _ => String::new(),
+    }
+}
+
+impl TryFrom<EntityMetadata> for StatementMetadata {
+    type Error = FederationError;
+
+    /// The typed metadata as a statement states it. No typed member's `additional` may repeat one
+    /// of its typed parameters, which would otherwise replace it. Rules on values, such as
+    /// `https` federation endpoints, are checked when the statement is signed.
+    fn try_from(metadata: EntityMetadata) -> FederationResult<Self> {
+        metadata.reject_typed_parameters_in_additional()?;
+        match serde_json::to_value(&metadata) {
+            Ok(serde_json::Value::Object(members)) => Self::from_json(members),
+            Ok(_) => Err(FederationError::InvalidMetadata(
+                "metadata is not a JSON object".to_string(),
+            )),
+            Err(error) => Err(FederationError::InvalidMetadata(format!(
+                "metadata does not serialize: {error}"
+            ))),
+        }
+    }
+}
+
+impl Serialize for StatementMetadata {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.to_json().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for StatementMetadata {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let members = serde_json::Map::deserialize(deserializer)?;
+        Self::from_json(members).map_err(serde::de::Error::custom)
     }
 }
 

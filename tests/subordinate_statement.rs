@@ -171,7 +171,7 @@ async fn built_statement_verifies_in_a_trust_chain() {
         federation_list_endpoint: Some(Url::parse("https://ta.example.org/list").unwrap()),
         ..Default::default()
     });
-    anchor.metadata = Some(anchor_metadata);
+    anchor.metadata = Some(anchor_metadata.try_into().unwrap());
 
     let mut leaf = EntityConfiguration::new(leaf_id(), jwks("op-key"), now() + 3600, now());
     leaf.authority_hints = Some(vec![anchor_id()]);
