@@ -601,22 +601,10 @@ impl SubordinateStatementBuilder {
 /// Reference: OpenID Federation 1.0 - Sections 5.1.1 to 5.1.4
 /// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1>)
 fn validate_metadata_for_signing(metadata: Option<&EntityMetadata>) -> FederationResult<()> {
-    let Some(metadata) = metadata else {
-        return Ok(());
-    };
-    if let Some(federation_entity) = &metadata.federation_entity {
-        federation_entity.validate()?;
+    match metadata {
+        Some(metadata) => metadata.validate_typed_members(),
+        None => Ok(()),
     }
-    if let Some(openid_provider) = &metadata.openid_provider {
-        openid_provider.validate()?;
-    }
-    if let Some(openid_relying_party) = &metadata.openid_relying_party {
-        openid_relying_party.validate()?;
-    }
-    if let Some(oauth_authorization_server) = &metadata.oauth_authorization_server {
-        oauth_authorization_server.validate()?;
-    }
-    Ok(())
 }
 
 /// Checks `iss` and `sub` of a statement this crate is about to sign: each Entity Identifier uses
