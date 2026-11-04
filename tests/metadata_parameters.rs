@@ -273,6 +273,23 @@ fn applying_a_policy_keeps_unknown_names_in_additional() {
     }
 }
 
+/// Typed metadata is checked before the policy runs, so an `http` endpoint is refused even when
+/// the policy would replace it with an `https` one.
+#[test]
+fn applying_a_policy_refuses_an_http_endpoint_the_policy_would_replace() {
+    let metadata: EntityMetadata = serde_json::from_value(json!({
+        "federation_entity": { "federation_fetch_endpoint": "http://ta.example.org/fetch" }
+    }))
+    .unwrap();
+    let policy: MetadataPolicy = serde_json::from_value(json!({
+        "federation_entity": { "federation_fetch_endpoint": { "value": "https://ta.example.org/fetch" } }
+    }))
+    .unwrap();
+    let error = apply_metadata_policy(&metadata, &policy).unwrap_err();
+    assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
+    assert!(error.to_string().contains("federation_fetch_endpoint"), "{error}");
+}
+
 const ED25519_DER: &[u8] = include_bytes!("data/signer/ed25519.pkcs8.der");
 const ED25519_JWK: &str = include_str!("data/signer/ed25519.public.jwk.json");
 
