@@ -244,21 +244,34 @@ fn issued_by(issuer: &EntityId, error: FederationError) -> FederationError {
 /// are not applied: this crate implements none, and [`resolve_metadata_policy`] rejects a
 /// policy that uses a critical one, while one that is not critical is ignored (Section 6.1.3.2).
 ///
-/// The typed members of [`EntityMetadata`] keep only the parameters their types define, so a
-/// parameter policy for any other parameter of those Entity Types has nothing to apply to.
+/// A parameter that a typed Entity Type has no field for, such as an RP's `scope`, is kept in
+/// its `additional` map, so a parameter policy applies to it like to any other.
 ///
 /// # Errors
 ///
 /// [`FederationError::InvalidMetadata`] naming the Entity Type, the metadata parameter and the
 /// operator that fails, a parameter policy that does not pass [`PolicyOperators::validate`], a
-/// `scope` that is no longer a list of strings, or an Entity Type whose Resolved Metadata no
-/// longer fits it: a required parameter removed, a value of the wrong type, or `federation_entity`
-/// metadata that fails [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate),
-/// such as an endpoint that is not `https`. Such metadata MUST NOT be used (Section 6.1.4.2).
+/// `scope` that is no longer a list of strings, OP, RP or AS metadata whose `additional` map
+/// repeats a typed parameter (see
+/// [`OpenIdConnectProviderMetadata::validate`](crate::OpenIdConnectProviderMetadata::validate)),
+/// or an Entity Type whose Resolved Metadata no longer fits it: a required parameter removed, a
+/// value of the wrong type, or `federation_entity` metadata that fails
+/// [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate), such as an
+/// endpoint that is not `https`. Such metadata MUST NOT be used (Section 6.1.4.2).
 ///
 /// Reference: OpenID Federation 1.0 - Section 6.1.4.2 Application
 /// <https://openid.net/specs/openid-federation-1_0.html#section-6.1.4.2>
 pub fn apply_metadata_policy(metadata: &EntityMetadata, policy: &MetadataPolicy) -> FederationResult<EntityMetadata> {
+    // A typed parameter repeated in `additional` would replace the typed field once serialized.
+    if let Some(openid_provider) = &metadata.openid_provider {
+        openid_provider.validate()?;
+    }
+    if let Some(openid_relying_party) = &metadata.openid_relying_party {
+        openid_relying_party.validate()?;
+    }
+    if let Some(oauth_authorization_server) = &metadata.oauth_authorization_server {
+        oauth_authorization_server.validate()?;
+    }
     let mut json = match serde_json::to_value(metadata) {
         Ok(Value::Object(json)) => json,
         Ok(other) => return Err(policy_error(format!("metadata is not a JSON object: {other}"))),
