@@ -1063,4 +1063,139 @@ mod typed_parameter_tests {
             .insert("token_endpoint".to_string(), json!("https://as.example.org/token"));
         assert!(server.validate().unwrap_err().to_string().contains("token_endpoint"));
     }
+
+    /// The names of a struct's typed fields. The pattern names every field but `additional`, so
+    /// a field added to the struct fails to compile here until it is named, and then
+    /// `every_field_is_a_listed_parameter` fails until it is also listed.
+    macro_rules! listed_fields {
+        ($ty:ident { $($field:ident),* $(,)? }) => {{
+            #[allow(dead_code)]
+            fn exhaustive(value: $ty) {
+                let $ty { $($field: _,)* additional: _ } = value;
+            }
+            [$(stringify!($field)),*]
+        }};
+    }
+
+    fn assert_listed(entity_type: &str, listed: &[&str], fields: &[&str]) {
+        let mut listed = listed.to_vec();
+        let mut fields = fields.to_vec();
+        listed.sort_unstable();
+        fields.sort_unstable();
+        assert_eq!(listed, fields, "{entity_type}");
+    }
+
+    #[test]
+    fn every_field_is_a_listed_parameter() {
+        // None of the structs renames a field, so a field name is its parameter name.
+        assert_listed(
+            "OpenIdConnectProviderMetadata",
+            &OPENID_PROVIDER_PARAMETERS,
+            &listed_fields!(OpenIdConnectProviderMetadata {
+                issuer,
+                authorization_endpoint,
+                token_endpoint,
+                userinfo_endpoint,
+                jwks_uri,
+                registration_endpoint,
+                scopes_supported,
+                response_types_supported,
+                response_modes_supported,
+                grant_types_supported,
+                acr_values_supported,
+                subject_types_supported,
+                id_token_signing_alg_values_supported,
+                id_token_encryption_alg_values_supported,
+                id_token_encryption_enc_values_supported,
+                userinfo_signing_alg_values_supported,
+                userinfo_encryption_alg_values_supported,
+                userinfo_encryption_enc_values_supported,
+                request_object_signing_alg_values_supported,
+                request_object_encryption_alg_values_supported,
+                request_object_encryption_enc_values_supported,
+                token_endpoint_auth_methods_supported,
+                token_endpoint_auth_signing_alg_values_supported,
+                display_values_supported,
+                claim_types_supported,
+                claims_supported,
+                service_documentation,
+                claims_locales_supported,
+                ui_locales_supported,
+                claims_parameter_supported,
+                request_parameter_supported,
+                request_uri_parameter_supported,
+                require_request_uri_registration,
+                op_policy_uri,
+                op_tos_uri,
+                signed_jwks_uri,
+                client_registration_types_supported,
+                federation_registration_endpoint,
+                logo_uri,
+            }),
+        );
+        assert_listed(
+            "OpenIdConnectRelyingPartyMetadata",
+            &OPENID_RELYING_PARTY_PARAMETERS,
+            &listed_fields!(OpenIdConnectRelyingPartyMetadata {
+                redirect_uris,
+                response_types,
+                grant_types,
+                application_type,
+                contacts,
+                client_name,
+                logo_uri,
+                client_uri,
+                policy_uri,
+                tos_uri,
+                jwks_uri,
+                jwks,
+                sector_identifier_uri,
+                subject_type,
+                id_token_signed_response_alg,
+                id_token_encrypted_response_alg,
+                id_token_encrypted_response_enc,
+                userinfo_signed_response_alg,
+                userinfo_encrypted_response_alg,
+                userinfo_encrypted_response_enc,
+                request_object_signing_alg,
+                request_object_encryption_alg,
+                request_object_encryption_enc,
+                token_endpoint_auth_method,
+                token_endpoint_auth_signing_alg,
+                default_max_age,
+                require_auth_time,
+                default_acr_values,
+                initiate_login_uri,
+                request_uris,
+            }),
+        );
+        assert_listed(
+            "OauthAuthorizationServerMetadata",
+            &OAUTH_AUTHORIZATION_SERVER_PARAMETERS,
+            &listed_fields!(OauthAuthorizationServerMetadata {
+                issuer,
+                authorization_endpoint,
+                token_endpoint,
+                jwks_uri,
+                registration_endpoint,
+                scopes_supported,
+                response_types_supported,
+                response_modes_supported,
+                grant_types_supported,
+                token_endpoint_auth_methods_supported,
+                token_endpoint_auth_signing_alg_values_supported,
+                service_documentation,
+                ui_locales_supported,
+                op_policy_uri,
+                op_tos_uri,
+                revocation_endpoint,
+                revocation_endpoint_auth_methods_supported,
+                revocation_endpoint_auth_signing_alg_values_supported,
+                introspection_endpoint,
+                introspection_endpoint_auth_methods_supported,
+                introspection_endpoint_auth_signing_alg_values_supported,
+                code_challenge_methods_supported,
+            }),
+        );
+    }
 }

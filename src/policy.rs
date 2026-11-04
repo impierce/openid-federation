@@ -244,8 +244,8 @@ fn issued_by(issuer: &EntityId, error: FederationError) -> FederationError {
 /// are not applied: this crate implements none, and [`resolve_metadata_policy`] rejects a
 /// policy that uses a critical one, while one that is not critical is ignored (Section 6.1.3.2).
 ///
-/// The typed members of [`EntityMetadata`] keep only the parameters their types define, so a
-/// parameter policy for any other parameter of those Entity Types has nothing to apply to.
+/// A parameter that a typed Entity Type has no field for, such as an RP's `scope`, is kept in
+/// its `additional` map, so a parameter policy applies to it like to any other.
 ///
 /// # Errors
 ///

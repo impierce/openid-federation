@@ -4,8 +4,8 @@
 
 use jsonwebtoken::Algorithm;
 use openid_federation::{
-    EntityConfiguration, EntityId, EntityMetadata, FederationError, InMemorySigner, Jwk, JwkSet,
-    OauthAuthorizationServerMetadata, OpenIdConnectProviderMetadata, OpenIdConnectRelyingPartyMetadata,
+    apply_metadata_policy, EntityConfiguration, EntityId, EntityMetadata, FederationError, InMemorySigner, Jwk, JwkSet,
+    MetadataPolicy, OauthAuthorizationServerMetadata, OpenIdConnectProviderMetadata, OpenIdConnectRelyingPartyMetadata,
     SubordinateStatement,
 };
 use serde_json::{json, Value};
@@ -129,6 +129,64 @@ fn a_defined_parameter_with_the_wrong_type_still_fails() {
     assert!(error.is_err(), "redirect_uris stays required: {error:?}");
 }
 
+/// An RP with `scope` and `client_registration_types`, neither of which has a field.
+fn relying_party() -> EntityMetadata {
+    serde_json::from_value(json!({
+        "openid_relying_party": {
+            "redirect_uris": ["https://rp.example.org/callback"],
+            "client_registration_types": ["automatic"],
+            "scope": "openid email address"
+        }
+    }))
+    .unwrap()
+}
+
+/// Section 6.1.3.1.5: a `subset_of` applies to an RP's `scope`, which is kept in `additional`.
+#[test]
+fn subset_of_applies_to_a_relying_party_scope() {
+    let policy: MetadataPolicy = serde_json::from_value(json!({
+        "openid_relying_party": { "scope": { "subset_of": ["openid", "email", "profile"] } }
+    }))
+    .unwrap();
+    let resolved = apply_metadata_policy(&relying_party(), &policy).unwrap();
+    let rp = resolved.openid_relying_party.unwrap();
+    assert_eq!(rp.additional.get("scope"), Some(&json!("openid email")));
+}
+
+/// Section 6.1.3.1.7: an `essential` `client_registration_types` passes when the RP publishes
+/// it, and fails when it does not.
+#[test]
+fn essential_client_registration_types_passes_when_published() {
+    let policy: MetadataPolicy = serde_json::from_value(json!({
+        "openid_relying_party": { "client_registration_types": { "essential": true } }
+    }))
+    .unwrap();
+    let resolved = apply_metadata_policy(&relying_party(), &policy).unwrap();
+    assert_eq!(
+        resolved
+            .openid_relying_party
+            .unwrap()
+            .additional
+            .get("client_registration_types"),
+        Some(&json!(["automatic"]))
+    );
+
+    let mut without = relying_party();
+    without
+        .openid_relying_party
+        .as_mut()
+        .unwrap()
+        .additional
+        .remove("client_registration_types");
+    let error = apply_metadata_policy(&without, &policy).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("openid_relying_party.client_registration_types"),
+        "{error}"
+    );
+}
+
 const ED25519_DER: &[u8] = include_bytes!("data/signer/ed25519.pkcs8.der");
 const ED25519_JWK: &str = include_str!("data/signer/ed25519.public.jwk.json");
 
@@ -174,4 +232,56 @@ async fn signing_refuses_a_typed_parameter_in_additional() {
             .contains("issuer is a typed openid_provider parameter"),
         "{error}"
     );
+}
+
+/// Signs `metadata` for https://rp.example.org in an Entity Configuration and in a Subordinate
+/// Statement, and checks that both refuse it with `message`.
+async fn assert_signing_refuses(metadata: EntityMetadata, message: &str) {
+    let signer = InMemorySigner::from_der(Algorithm::EdDSA, "key", ED25519_DER).unwrap();
+    let mut key: Jwk = serde_json::from_str(ED25519_JWK).unwrap();
+    key.kid = Some("key".to_string());
+    let mut jwks = JwkSet::new();
+    jwks.add_key(key);
+    let now = chrono::Utc::now().timestamp();
+    let entity = EntityId::parse("https://rp.example.org").unwrap();
+
+    let mut configuration = EntityConfiguration::new(entity.clone(), jwks.clone(), now + 3600, now);
+    configuration.metadata = Some(metadata.clone());
+    let error = configuration.sign(&signer).await.unwrap_err();
+    assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
+    assert!(error.to_string().contains(message), "{error}");
+
+    let statement = SubordinateStatement::new(
+        EntityId::parse("https://ta.example.org").unwrap(),
+        entity,
+        now + 3600,
+        now,
+        jwks,
+    )
+    .with_metadata(metadata);
+    let error = statement.sign(&signer).await.unwrap_err();
+    assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
+    assert!(error.to_string().contains(message), "{error}");
+}
+
+/// The same refusal for a typed RP and Authorization Server parameter in `additional`.
+#[tokio::test]
+async fn signing_refuses_a_typed_rp_or_as_parameter_in_additional() {
+    let mut rp = relying_party();
+    rp.openid_relying_party.as_mut().unwrap().additional.insert(
+        "redirect_uris".to_string(),
+        json!(["https://other.example.org/callback"]),
+    );
+    assert_signing_refuses(rp, "redirect_uris is a typed openid_relying_party parameter").await;
+
+    let mut server: EntityMetadata =
+        serde_json::from_value(json!({ "oauth_authorization_server": { "issuer": "https://rp.example.org" } }))
+            .unwrap();
+    server
+        .oauth_authorization_server
+        .as_mut()
+        .unwrap()
+        .additional
+        .insert("token_endpoint".to_string(), json!("https://other.example.org/token"));
+    assert_signing_refuses(server, "token_endpoint is a typed oauth_authorization_server parameter").await;
 }
