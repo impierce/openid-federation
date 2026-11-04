@@ -284,6 +284,42 @@ async fn allowed_entity_types_keeps_the_listed_entity_types() {
     );
 }
 
+/// Section 6.2.3: an ancestor's `allowed_entity_types` removes an Entity Type that the Immediate
+/// Superior's `allowed_entity_types` lists.
+#[tokio::test]
+async fn ancestor_allowed_entity_types_removes_types_the_superior_allows() {
+    let chain = vec![
+        entity_configuration(json!({
+            "authority_hints": ["https://ia.example.org"],
+            "iss": "https://rp.example.org",
+            "sub": "https://rp.example.org",
+            "metadata": {
+                "federation_entity": { "organization_name": "Example RP" },
+                "openid_relying_party": { "redirect_uris": ["https://rp.example.org/callback"] }
+            }
+        }))
+        .await,
+        subordinate_statement(json!({
+            "iss": "https://ia.example.org",
+            "sub": "https://rp.example.org",
+            "constraints": { "allowed_entity_types": ["openid_relying_party"] }
+        }))
+        .await,
+        subordinate_statement(json!({
+            "iss": "https://ta.example.org",
+            "sub": "https://ia.example.org",
+            "constraints": { "allowed_entity_types": ["openid_provider"] }
+        }))
+        .await,
+        entity_configuration(json!({ "iss": "https://ta.example.org", "sub": "https://ta.example.org" })).await,
+    ];
+    let resolved = TrustChain::try_new(chain, &[]).unwrap();
+    assert_eq!(
+        serde_json::to_value(resolved.metadata()).unwrap(),
+        json!({ "federation_entity": { "organization_name": "Example RP" } })
+    );
+}
+
 /// Section 6.1.4.1: an Intermediate's policy that conflicts with the Trust Anchor's makes the
 /// chain invalid.
 #[tokio::test]

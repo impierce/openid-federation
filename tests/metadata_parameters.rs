@@ -358,6 +358,52 @@ fn statement_metadata_refuses_a_typed_parameter_in_additional() {
     }
 }
 
+/// An `extensions` member named after a typed Entity Type would replace the typed member once
+/// serialized, so converting to `StatementMetadata` and applying a policy refuse it.
+#[test]
+fn extensions_named_after_a_typed_entity_type_are_refused() {
+    let mut metadata: EntityMetadata = serde_json::from_value(json!({
+        "openid_relying_party": { "redirect_uris": ["https://rp.example.org/callback"] }
+    }))
+    .unwrap();
+    metadata.extensions.insert(
+        "openid_relying_party".to_string(),
+        json!({ "redirect_uris": ["https://other.example.org/callback"] }),
+    );
+    let errors = [
+        StatementMetadata::try_from(metadata.clone()).unwrap_err(),
+        apply_metadata_policy(&metadata, &MetadataPolicy::new()).unwrap_err(),
+    ];
+    for error in errors {
+        assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("openid_relying_party is a typed Entity Type and must not appear in extensions"),
+            "{error}"
+        );
+    }
+}
+
+/// `with_federation_entity` refuses an `additional` member that repeats a typed parameter.
+#[test]
+fn with_federation_entity_refuses_a_typed_parameter_in_additional() {
+    let metadata = with_typed_name_in_additional(
+        "federation_entity",
+        "federation_fetch_endpoint",
+        json!("https://other.example.org/fetch"),
+    );
+    let error = StatementMetadata::new()
+        .with_federation_entity(metadata.federation_entity.unwrap())
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("federation_fetch_endpoint is a typed federation_entity parameter"),
+        "{error}"
+    );
+}
+
 /// Section 3.1.1: a statement's `metadata` claim may hold only some of an Entity Type's
 /// parameters, so it parses and round-trips; reading it as types needs it complete.
 #[test]

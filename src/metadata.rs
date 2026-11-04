@@ -665,6 +665,16 @@ fn reject_typed_parameters_in_additional(
     }
 }
 
+/// The Entity Types [`EntityMetadata`] has a field for.
+const TYPED_ENTITY_TYPES: [&str; 6] = [
+    "federation_entity",
+    "openid_provider",
+    "openid_relying_party",
+    "oauth_authorization_server",
+    "oauth_resource",
+    "oauth_client",
+];
+
 /// Comprehensive metadata structure that can contain metadata for any entity type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntityMetadata {
@@ -692,9 +702,26 @@ pub struct EntityMetadata {
 }
 
 impl EntityMetadata {
-    /// Refuses an `additional` member of a typed Entity Type that repeats one of its typed
-    /// parameters. Serialized, it would replace the typed value.
+    /// Refuses an `extensions` member named after an Entity Type this struct has a field for.
+    /// Serialized, it would replace the typed member.
+    fn reject_typed_entity_types_in_extensions(&self) -> FederationResult<()> {
+        match self
+            .extensions
+            .keys()
+            .find(|name| TYPED_ENTITY_TYPES.contains(&name.as_str()))
+        {
+            Some(name) => Err(FederationError::InvalidMetadata(format!(
+                "{name} is a typed Entity Type and must not appear in extensions"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// Refuses an `extensions` member named after a typed Entity Type, and an `additional`
+    /// member of a typed Entity Type that repeats one of its typed parameters. Serialized, either
+    /// would replace the typed value.
     pub(crate) fn reject_typed_parameters_in_additional(&self) -> FederationResult<()> {
+        self.reject_typed_entity_types_in_extensions()?;
         if let Some(federation_entity) = &self.federation_entity {
             reject_typed_parameters_in_additional(
                 "federation_entity",
@@ -729,8 +756,10 @@ impl EntityMetadata {
     /// Runs `validate` on each typed Entity Type member: `federation_entity`, `openid_provider`,
     /// `openid_relying_party` and `oauth_authorization_server`. Each refuses an `additional`
     /// member that repeats one of its typed parameters, which would appear twice in signed JSON
-    /// or, once serialized, replace the typed value.
+    /// or, once serialized, replace the typed value. An `extensions` member named after a typed
+    /// Entity Type is refused for the same reason.
     pub(crate) fn validate_typed_members(&self) -> FederationResult<()> {
+        self.reject_typed_entity_types_in_extensions()?;
         if let Some(federation_entity) = &self.federation_entity {
             federation_entity.validate()?;
         }
@@ -881,9 +910,20 @@ impl StatementMetadata {
     }
 
     /// Sets the `federation_entity` metadata.
-    pub fn with_federation_entity(mut self, federation_entity: FederationEntityMetadata) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::InvalidMetadata`] when its `additional` repeats a typed parameter,
+    /// which would otherwise replace the typed value. Rules on values, such as `https`
+    /// federation endpoints, are checked when the statement is signed.
+    pub fn with_federation_entity(mut self, federation_entity: FederationEntityMetadata) -> FederationResult<Self> {
+        reject_typed_parameters_in_additional(
+            "federation_entity",
+            &FEDERATION_ENTITY_PARAMETERS,
+            &federation_entity.additional,
+        )?;
         self.federation_entity = Some(federation_entity);
-        self
+        Ok(self)
     }
 
     /// The `federation_entity` metadata, if the statement has it.
@@ -981,7 +1021,8 @@ impl TryFrom<EntityMetadata> for StatementMetadata {
     type Error = FederationError;
 
     /// The typed metadata as a statement states it. No typed member's `additional` may repeat one
-    /// of its typed parameters, which would otherwise replace it. Rules on values, such as
+    /// of its typed parameters, and no `extensions` member may be named after a typed Entity
+    /// Type, which would otherwise replace it. Rules on values, such as
     /// `https` federation endpoints, are checked when the statement is signed.
     fn try_from(metadata: EntityMetadata) -> FederationResult<Self> {
         metadata.reject_typed_parameters_in_additional()?;
