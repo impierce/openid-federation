@@ -162,6 +162,49 @@ fn processor_signs_and_verifies_with_keys() {
         .verify_jwt_with_typ::<Value>(&jwt, &key, Algorithm::EdDSA, "other-list+jwt")
         .unwrap_err();
     assert!(matches!(error, FederationError::InvalidJwtHeaderTyp(_)), "{error:?}");
+
+    let mut parts: Vec<String> = jwt.split('.').map(str::to_string).collect();
+    let mut tampered = claims.clone();
+    tampered["entries"] = json!(["https://attacker.example.org"]);
+    parts[1] = base64_url(&serde_json::to_vec(&tampered).unwrap());
+    assert!(processor
+        .verify_jwt_with_typ::<Value>(&parts.join("."), &key, Algorithm::EdDSA, LIST_TYP)
+        .is_err());
+
+    for typ in ["entity-statement+jwt", "application/Trust-Mark+JWT", ""] {
+        let error = processor
+            .verify_jwt_with_typ::<Value>(&jwt, &key, Algorithm::EdDSA, typ)
+            .unwrap_err();
+        assert!(matches!(error, FederationError::Configuration(_)), "{typ:?}: {error:?}");
+    }
+}
+
+/// A symmetric key in the `jwks` never verifies, even when the JWT is signed with it: anyone who
+/// reads the set could sign with it.
+#[test]
+fn symmetric_key_in_jwks_is_refused() {
+    let secret = b"a secret that the jwks discloses";
+    let jwt = JwtProcessor::new()
+        .sign_jwt_with_typ(
+            &claims(),
+            &EncodingKey::from_secret(secret),
+            Algorithm::HS256,
+            LIST_TYP,
+            Some("hmac".to_string()),
+        )
+        .unwrap();
+    let key: Jwk = serde_json::from_value(json!({
+        "kty": "oct",
+        "kid": "hmac",
+        "k": base64_url(secret)
+    }))
+    .unwrap();
+    let mut jwks = JwkSet::new();
+    jwks.add_key(key);
+    let error = JwtProcessor::new()
+        .verify_jwt_with_jwks_typ::<Value>(&jwt, &jwks, LIST_TYP)
+        .unwrap_err();
+    assert!(error.to_string().contains("symmetric key"), "{error}");
 }
 
 fn base64_url(bytes: &[u8]) -> String {

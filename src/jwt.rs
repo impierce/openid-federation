@@ -119,6 +119,7 @@ enum ExpectedTyp<'a> {
 }
 
 impl ExpectedTyp<'_> {
+    /// The `typ` header value a JWT of this kind carries.
     fn header_value(&self) -> &str {
         match self {
             Self::Artifact(artifact_type) => artifact_type.header_value(),
@@ -126,6 +127,7 @@ impl ExpectedTyp<'_> {
         }
     }
 
+    /// Check a header's `typ` against this kind, as [`JwtArtifactType::validate_header_typ`] does.
     fn validate_header_typ(&self, header_typ: Option<&str>) -> FederationResult<()> {
         match self {
             Self::Artifact(artifact_type) => artifact_type.validate_header_typ(header_typ),
@@ -384,6 +386,7 @@ impl JwtProcessor {
         )
     }
 
+    /// Sign `claims` with `key` under the `typ` of `typ`; the shared path of the `sign_jwt*` functions.
     fn sign<T: Serialize>(
         &self,
         claims: &T,
@@ -446,6 +449,7 @@ impl JwtProcessor {
         self.verify(token, key, algorithm, ExpectedTyp::Application(application_typ(typ)?))
     }
 
+    /// Check `typ`, the signature and the time claims; the shared path of the `verify_jwt*` functions.
     fn verify<T: for<'de> Deserialize<'de>>(
         &self,
         token: &str,
@@ -519,7 +523,8 @@ impl JwtProcessor {
     /// # Errors
     ///
     /// [`FederationError::Configuration`] when `typ` is empty or is the `typ` of one of the
-    /// specification's artifacts, and the errors of
+    /// specification's artifacts, [`FederationError::InvalidSubordinateStatement`] when the key
+    /// the `kid` names is a symmetric (`oct`) key, and the errors of
     /// [`verify_jwt_with_jwks`](Self::verify_jwt_with_jwks).
     pub fn verify_jwt_with_jwks_typ<T: for<'de> Deserialize<'de>>(
         &self,
@@ -530,6 +535,8 @@ impl JwtProcessor {
         self.verify_with_jwks(token, jwks, ExpectedTyp::Application(application_typ(typ)?))
     }
 
+    /// Pick the key the header's `kid` names in `jwks` and [`verify`](Self::verify) with it; the
+    /// shared path of the `verify_jwt_with_jwks*` functions.
     fn verify_with_jwks<T: for<'de> Deserialize<'de>>(
         &self,
         token: &str,
@@ -560,6 +567,13 @@ impl JwtProcessor {
             .ok_or_else(|| {
                 FederationError::InvalidSubordinateStatement(format!("no key in the jwks has the kid {kid:?}"))
             })?;
+        // A symmetric key would let anyone who reads the set sign with it, so it never verifies
+        // an application artifact; a JWK Set only carries public keys (`JwkSet::validate`).
+        if matches!(typ, ExpectedTyp::Application(_)) && jwk.kty == "oct" {
+            return Err(FederationError::InvalidSubordinateStatement(format!(
+                "the key {kid:?} is a symmetric key; a jwks may only carry public keys"
+            )));
+        }
         self.verify(token, &jwk.to_decoding_key()?, header.alg, typ)
     }
 }
@@ -718,6 +732,8 @@ pub async fn sign_federation_jwt_with_typ<T: Serialize + ?Sized>(
     sign_with_federation_key(claims, ExpectedTyp::Application(application_typ(typ)?), signer).await
 }
 
+/// Sign `claims` with `signer` under the `typ` of `typ`, with the signer's `alg` and `kid`; the
+/// shared path of the `sign_federation_jwt*` functions.
 async fn sign_with_federation_key<T: Serialize + ?Sized>(
     claims: &T,
     typ: ExpectedTyp<'_>,
