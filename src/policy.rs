@@ -1,10 +1,11 @@
-//! Resolving the metadata policy of a Trust Chain: the `metadata_policy` claims of its
-//! Subordinate Statements merged into one (OpenID Federation 1.0, Section 6.1.4.1).
+//! Metadata policies along a Trust Chain: the `metadata_policy` claims of its Subordinate
+//! Statements merged into one (OpenID Federation 1.0, Section 6.1.4.1), and the resolved policy
+//! applied to metadata (Section 6.1.4.2).
 
 use crate::types::policy_error;
 use crate::{validate_metadata_policy, FederationError, FederationResult, MetadataPolicy, PolicyOperators};
-use crate::{EntityId, SubordinateStatement};
-use serde_json::Value;
+use crate::{EntityId, EntityMetadata, SubordinateStatement};
+use serde_json::{Map, Value};
 
 /// Resolves the metadata policy of a Trust Chain from its Subordinate Statements.
 ///
@@ -213,6 +214,217 @@ fn issued_by(issuer: &EntityId, error: FederationError) -> FederationError {
     match error {
         FederationError::InvalidMetadata(message) => {
             FederationError::InvalidMetadata(format!("the metadata_policy issued by {issuer}: {message}"))
+        }
+        other => other,
+    }
+}
+
+/// Applies a resolved metadata policy to `metadata` and returns the Resolved Metadata.
+///
+/// For every Entity Type that both `policy` and `metadata` have, and every metadata parameter
+/// with a parameter policy, the operators run in their order of application (Section 6.1.3.1):
+///
+/// 1. `value`: the parameter takes the operator's value; `null` removes it.
+/// 2. `add`: the values the parameter lacks are appended; an absent parameter is initialized
+///    with them.
+/// 3. `default`: an absent parameter takes the operator's value.
+/// 4. `one_of`: a present parameter must be one of the values.
+/// 5. `subset_of`: a present parameter keeps only the values it shares with the operator, which
+///    may leave `[]`.
+/// 6. `superset_of`: a present parameter must contain every value.
+/// 7. `essential`: when `true`, the parameter must be present.
+///
+/// `subset_of` and `superset_of` are therefore skipped for an absent parameter, and an absent
+/// `essential` one fails (Section 6.1.3.1.8, Table 1). The `scope` parameter, a string of
+/// space-separated values, is processed as an array of those values and written back as such a
+/// string (Section 6.1.3.1.8). Values compare as JSON values, objects included.
+///
+/// Metadata is processed in its JSON form, so typed and other Entity Types behave the same. A
+/// policy for an Entity Type that `metadata` does not have is not applied. Additional operators
+/// are not applied: this crate implements none, and [`resolve_metadata_policy`] rejects a
+/// policy that uses a critical one, while one that is not critical is ignored (Section 6.1.3.2).
+///
+/// The typed members of [`EntityMetadata`] keep only the parameters their types define, so a
+/// parameter policy for any other parameter of those Entity Types has nothing to apply to.
+///
+/// # Errors
+///
+/// [`FederationError::InvalidMetadata`] naming the Entity Type, the metadata parameter and the
+/// operator that fails, a parameter policy that does not pass [`PolicyOperators::validate`], a
+/// `scope` that is no longer a list of strings, or an Entity Type whose Resolved Metadata no
+/// longer fits it: a required parameter removed, a value of the wrong type, or `federation_entity`
+/// metadata that fails [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate),
+/// such as an endpoint that is not `https`. Such metadata MUST NOT be used (Section 6.1.4.2).
+///
+/// Reference: OpenID Federation 1.0 - Section 6.1.4.2 Application
+/// <https://openid.net/specs/openid-federation-1_0.html#section-6.1.4.2>
+pub fn apply_metadata_policy(metadata: &EntityMetadata, policy: &MetadataPolicy) -> FederationResult<EntityMetadata> {
+    let mut json = match serde_json::to_value(metadata) {
+        Ok(Value::Object(json)) => json,
+        Ok(other) => return Err(policy_error(format!("metadata is not a JSON object: {other}"))),
+        Err(error) => return Err(policy_error(format!("metadata does not serialize: {error}"))),
+    };
+
+    let mut entity_types: Vec<&String> = policy.keys().collect();
+    entity_types.sort();
+    for entity_type in entity_types {
+        let Some(Value::Object(parameters)) = json.get_mut(entity_type) else {
+            continue;
+        };
+        let parameter_policies = &policy[entity_type];
+        let mut names: Vec<&String> = parameter_policies.keys().collect();
+        names.sort();
+        for name in names {
+            apply_operators(parameters, name, &parameter_policies[name]).map_err(|error| match error {
+                FederationError::InvalidMetadata(message) => {
+                    FederationError::InvalidMetadata(format!("{entity_type}.{name}: {message}"))
+                }
+                other => other,
+            })?;
+        }
+    }
+
+    let resolved: EntityMetadata = serde_json::from_value(Value::Object(json.clone())).map_err(|error| {
+        // Name the Entity Type whose metadata no longer fits: deserialize each member alone.
+        let entity_type = json.iter().find_map(|(entity_type, metadata)| {
+            let mut member = Map::new();
+            member.insert(entity_type.clone(), metadata.clone());
+            serde_json::from_value::<EntityMetadata>(Value::Object(member))
+                .is_err()
+                .then_some(entity_type)
+        });
+        match entity_type {
+            Some(entity_type) => policy_error(format!(
+                "{entity_type}: the Resolved Metadata is not valid {entity_type} metadata: {error}"
+            )),
+            None => policy_error(format!("the Resolved Metadata is not valid metadata: {error}")),
+        }
+    })?;
+    if let Some(federation_entity) = &resolved.federation_entity {
+        federation_entity.validate().map_err(|error| {
+            policy_error(format!(
+                "federation_entity: the Resolved Metadata is not valid federation_entity metadata: {error}"
+            ))
+        })?;
+    }
+    Ok(resolved)
+}
+
+/// Applies the operators of one metadata parameter policy to the parameter `name` of
+/// `parameters`, in their order of application.
+fn apply_operators(
+    parameters: &mut Map<String, Value>,
+    name: &str,
+    operators: &PolicyOperators,
+) -> FederationResult<()> {
+    // A resolved policy is valid already; a policy from elsewhere gets the same checks.
+    operators.validate()?;
+    let scope = name == "scope";
+    let as_processed = |value: Value| if scope { scope_values(value) } else { value };
+    let mut parameter = parameters.remove(name).map(as_processed);
+
+    if let Some(value) = &operators.value {
+        parameter = (!value.is_null()).then(|| as_processed(value.clone()));
+    }
+    if let Some(add) = &operators.add {
+        let mut values = match parameter.take() {
+            None => Vec::new(),
+            Some(Value::Array(values)) => values,
+            Some(other) => return Err(policy_error(format!("add: the parameter {other} is not an array"))),
+        };
+        for value in add.as_array().into_iter().flatten() {
+            if !values.contains(value) {
+                values.push(value.clone());
+            }
+        }
+        parameter = Some(Value::Array(values));
+    }
+    if parameter.is_none() {
+        parameter = operators.default.clone().map(as_processed);
+    }
+    if let (Some(present), Some(one_of)) = (&parameter, &operators.one_of) {
+        let candidate = if scope {
+            scope_string(present.clone())
+        } else {
+            present.clone()
+        };
+        if !one_of.contains(&candidate) {
+            return Err(policy_error(format!(
+                "one_of: {candidate} is not one of {}",
+                Value::Array(one_of.clone())
+            )));
+        }
+    }
+    if let Some(subset_of) = &operators.subset_of {
+        match &mut parameter {
+            None => {}
+            Some(Value::Array(values)) => values.retain(|value| subset_of.contains(value)),
+            Some(other) => {
+                return Err(policy_error(format!(
+                    "subset_of: the parameter {other} is not an array"
+                )))
+            }
+        }
+    }
+    if let Some(superset_of) = &operators.superset_of {
+        match &parameter {
+            None => {}
+            Some(Value::Array(values)) => {
+                let missing: Vec<Value> = superset_of
+                    .iter()
+                    .filter(|value| !values.contains(value))
+                    .cloned()
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(policy_error(format!(
+                        "superset_of: the parameter lacks {}",
+                        Value::Array(missing)
+                    )));
+                }
+            }
+            Some(other) => {
+                return Err(policy_error(format!(
+                    "superset_of: the parameter {other} is not an array"
+                )))
+            }
+        }
+    }
+    if operators.essential == Some(true) && parameter.is_none() {
+        return Err(policy_error("essential: the parameter is absent".to_string()));
+    }
+
+    if let Some(parameter) = parameter {
+        let parameter = if scope { scope_string(parameter) } else { parameter };
+        if scope && !parameter.is_string() {
+            return Err(policy_error(format!(
+                "scope: {parameter} is not a list of strings to write back as a space-separated string"
+            )));
+        }
+        parameters.insert(name.to_string(), parameter);
+    }
+    Ok(())
+}
+
+/// The values of a `scope` string, as the array that policy operators process; any other JSON
+/// value unchanged.
+fn scope_values(value: Value) -> Value {
+    match value {
+        Value::String(scope) => Value::Array(
+            scope
+                .split_whitespace()
+                .map(|value| Value::String(value.to_string()))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+/// An array of `scope` values as the space-separated string the metadata carries; any other
+/// JSON value, or an array with a value that is not a string, unchanged.
+fn scope_string(value: Value) -> Value {
+    match value {
+        Value::Array(values) if values.iter().all(Value::is_string) => {
+            Value::String(values.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "))
         }
         other => other,
     }
