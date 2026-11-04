@@ -237,7 +237,7 @@ impl FederationClient {
             entity_id: candidate.clone(),
             entity_types: metadata.map(|metadata| metadata.entity_types()).unwrap_or_default(),
             intermediate: metadata
-                .and_then(|metadata| metadata.federation_entity.as_ref())
+                .and_then(|metadata| metadata.federation_entity())
                 .is_some_and(|federation_entity| federation_entity.federation_fetch_endpoint.is_some()),
             configuration,
             failures,

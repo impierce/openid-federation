@@ -813,7 +813,7 @@ mod tests {
         });
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
-            .with_metadata(metadata)
+            .with_metadata(metadata.try_into().unwrap())
             .with_authority_hints(vec![university_url.clone()])
     }
 
@@ -863,7 +863,7 @@ mod tests {
         });
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
-            .with_metadata(metadata)
+            .with_metadata(metadata.try_into().unwrap())
             .with_authority_hints(vec![federation_url.clone()])
     }
 
@@ -909,7 +909,7 @@ mod tests {
             ..Default::default()
         });
 
-        EntityConfiguration::new(entity_id, jwks, exp, iat).with_metadata(metadata)
+        EntityConfiguration::new(entity_id, jwks, exp, iat).with_metadata(metadata.try_into().unwrap())
     }
 
     fn encode_entity_configuration(config: &EntityConfiguration, key: &EncodingKey) -> String {
@@ -991,7 +991,7 @@ mod tests {
         });
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
-            .with_metadata(metadata)
+            .with_metadata(metadata.try_into().unwrap())
             .with_authority_hints(vec![federation_url.clone()])
     }
 
@@ -1039,7 +1039,7 @@ mod tests {
         });
 
         EntityConfiguration::new(entity_id, jwks, exp, iat)
-            .with_metadata(metadata)
+            .with_metadata(metadata.try_into().unwrap())
             .with_authority_hints(vec![federation_url.clone()])
     }
 
@@ -1147,7 +1147,7 @@ mod tests {
             expires_in(Duration::hours(24)),
             chrono::Utc::now().timestamp(),
         )
-        .with_metadata(intermediate_metadata)
+        .with_metadata(intermediate_metadata.try_into().unwrap())
         .with_authority_hints(vec![anchor_url.clone()]);
 
         let intermediate_jwt = encode(&federation_header(), &intermediate_config, &encoding_key).unwrap();
@@ -1341,7 +1341,7 @@ mod tests {
                 federation_historical_keys_endpoint: None,
                 ..Default::default()
             });
-            metadata
+            metadata.try_into().unwrap()
         })
         .with_authority_hints(vec![trust_anchor_one_url.clone()]);
 
@@ -1386,7 +1386,7 @@ mod tests {
                 federation_historical_keys_endpoint: None,
                 ..Default::default()
             });
-            metadata
+            metadata.try_into().unwrap()
         })
         .with_authority_hints(vec![trust_anchor_two_url.clone()]);
 
@@ -1431,7 +1431,7 @@ mod tests {
                 federation_historical_keys_endpoint: None,
                 ..Default::default()
             });
-            metadata
+            metadata.try_into().unwrap()
         });
 
         Mock::given(method("GET"))
@@ -1475,7 +1475,7 @@ mod tests {
                 federation_historical_keys_endpoint: None,
                 ..Default::default()
             });
-            metadata
+            metadata.try_into().unwrap()
         });
 
         Mock::given(method("GET"))
@@ -1782,7 +1782,7 @@ mod tests {
             expires_in(Duration::hours(24)),
             chrono::Utc::now().timestamp(),
         )
-        .with_metadata(entity_a_metadata)
+        .with_metadata(entity_a_metadata.try_into().unwrap())
         .with_authority_hints(vec![entity_b_url.clone()]);
 
         let entity_a_jwt = encode(&federation_header(), &entity_a_config, &encoding_key).unwrap();
@@ -1827,7 +1827,7 @@ mod tests {
             expires_in(Duration::hours(24)),
             chrono::Utc::now().timestamp(),
         )
-        .with_metadata(entity_b_metadata)
+        .with_metadata(entity_b_metadata.try_into().unwrap())
         .with_authority_hints(vec![entity_a_url.clone()]);
 
         let entity_b_jwt = encode(&federation_header(), &entity_b_config, &encoding_key).unwrap();

@@ -7,8 +7,8 @@ use url::Url;
 
 use crate::types::STANDARD_POLICY_OPERATORS;
 use crate::{
-    extract_claims_unverified, sign_federation_jwt, Constraints, EntityId, EntityMetadata, FederationError,
-    FederationResult, JwkSet, JwtArtifactType, JwtClaims, JwtProcessor, PolicyOperators, Signer, TrustMarkEntry,
+    extract_claims_unverified, sign_federation_jwt, Constraints, EntityId, FederationError, FederationResult, JwkSet,
+    JwtArtifactType, JwtClaims, JwtProcessor, PolicyOperators, Signer, StatementMetadata, TrustMarkEntry,
     TrustMarkIssuers, TrustMarkOwners, UrlValidator,
 };
 
@@ -26,7 +26,7 @@ pub struct SubordinateStatement {
     pub crit: Option<Vec<String>>,
     pub jwks: JwkSet,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<EntityMetadata>,
+    pub metadata: Option<StatementMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_policy: Option<HashMap<String, HashMap<String, PolicyOperators>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,7 +50,7 @@ pub struct EntityConfiguration {
     pub crit: Option<Vec<String>>,
     pub jwks: JwkSet,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<EntityMetadata>,
+    pub metadata: Option<StatementMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_anchor_hints: Option<Vec<EntityId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,7 +93,7 @@ impl SubordinateStatement {
         self
     }
 
-    pub fn with_metadata(mut self, metadata: EntityMetadata) -> Self {
+    pub fn with_metadata(mut self, metadata: StatementMetadata) -> Self {
         self.metadata = Some(metadata);
         self
     }
@@ -473,7 +473,7 @@ pub struct SubordinateStatementBuilder {
     jwks: JwkSet,
     issued_at: Option<i64>,
     expiry: Option<Expiry>,
-    metadata: Option<EntityMetadata>,
+    metadata: Option<StatementMetadata>,
     metadata_policy: Option<HashMap<String, HashMap<String, PolicyOperators>>>,
     metadata_policy_crit: Option<Vec<String>>,
     constraints: Option<Constraints>,
@@ -504,7 +504,7 @@ impl SubordinateStatementBuilder {
 
     /// Metadata the Superior overrides for the subject. It applies only to the Entity Types the
     /// subject declares, and only to the subject (Section 3.1.3).
-    pub fn metadata(mut self, metadata: EntityMetadata) -> Self {
+    pub fn metadata(mut self, metadata: StatementMetadata) -> Self {
         self.metadata = Some(metadata);
         self
     }
@@ -590,19 +590,18 @@ impl SubordinateStatementBuilder {
     }
 }
 
-/// Checks the metadata of a statement this crate is about to sign. `federation_entity` goes
-/// through [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate):
-/// `https` federation endpoints without a fragment, and no `none` in
-/// `endpoint_auth_signing_alg_values_supported`. The typed `openid_provider`,
-/// `openid_relying_party` and `oauth_authorization_server` metadata go through their own
-/// `validate`: no `additional` member repeats a typed parameter, which would appear twice in the
-/// signed JSON. Like the Entity Identifier check, it runs when signing only.
+/// Checks the metadata of a statement this crate is about to sign: `federation_entity` goes
+/// through [`FederationEntityMetadata::validate`](crate::FederationEntityMetadata::validate),
+/// so its federation endpoints use `https` without a fragment, and
+/// `endpoint_auth_signing_alg_values_supported` does not list `none`. The other members are
+/// JSON objects as [`StatementMetadata`] holds them, so no parameter can appear twice. Like the
+/// Entity Identifier check, it runs when signing only.
 ///
-/// Reference: OpenID Federation 1.0 - Sections 5.1.1 to 5.1.4
-/// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1>)
-fn validate_metadata_for_signing(metadata: Option<&EntityMetadata>) -> FederationResult<()> {
-    match metadata {
-        Some(metadata) => metadata.validate_typed_members(),
+/// Reference: OpenID Federation 1.0 - Section 5.1.1
+/// (<https://openid.net/specs/openid-federation-1_0.html#section-5.1.1>)
+fn validate_metadata_for_signing(metadata: Option<&StatementMetadata>) -> FederationResult<()> {
+    match metadata.and_then(StatementMetadata::federation_entity) {
+        Some(federation_entity) => federation_entity.validate(),
         None => Ok(()),
     }
 }
@@ -651,7 +650,7 @@ impl EntityConfiguration {
         }
     }
 
-    pub fn with_metadata(mut self, metadata: EntityMetadata) -> Self {
+    pub fn with_metadata(mut self, metadata: StatementMetadata) -> Self {
         self.metadata = Some(metadata);
         self
     }
@@ -845,10 +844,7 @@ impl EntityConfiguration {
     }
 
     fn require_superior_endpoints(&self, role: &str) -> FederationResult<()> {
-        let federation_entity = self
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.federation_entity.as_ref());
+        let federation_entity = self.metadata.as_ref().and_then(StatementMetadata::federation_entity);
         for (name, endpoint) in [
             (
                 "federation_fetch_endpoint",

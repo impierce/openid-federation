@@ -268,12 +268,21 @@ fn issued_by(issuer: &EntityId, error: FederationError) -> FederationError {
 pub fn apply_metadata_policy(metadata: &EntityMetadata, policy: &MetadataPolicy) -> FederationResult<EntityMetadata> {
     // A typed parameter repeated in `additional` would replace the typed field once serialized.
     metadata.validate_typed_members()?;
-    let mut json = match serde_json::to_value(metadata) {
+    let json = match serde_json::to_value(metadata) {
         Ok(Value::Object(json)) => json,
         Ok(other) => return Err(policy_error(format!("metadata is not a JSON object: {other}"))),
         Err(error) => return Err(policy_error(format!("metadata does not serialize: {error}"))),
     };
+    apply_metadata_policy_to_json(json, policy)
+}
 
+/// [`apply_metadata_policy`] on metadata in its JSON form, which need not be complete before
+/// the policy is applied, as Trust Chain resolution requires: a superior's metadata or policy
+/// may supply what the subject's Entity Configuration leaves out. The result must be complete.
+pub(crate) fn apply_metadata_policy_to_json(
+    mut json: Map<String, Value>,
+    policy: &MetadataPolicy,
+) -> FederationResult<EntityMetadata> {
     let mut entity_types: Vec<&String> = policy.keys().collect();
     entity_types.sort();
     for entity_type in entity_types {
