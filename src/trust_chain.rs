@@ -4,32 +4,61 @@
 //! - **Push method**: Validates a pre-compiled trust chain (provided inline)
 //! - **Pull method**: Dynamically resolves a trust chain via `FederationClient::discover_trust_chain`
 
+use crate::metadata::entity_type_identifier;
+use crate::policy::apply_metadata_policy_to_json;
 use crate::{
-    extract_claims_unverified, EntityConfiguration, EntityId, FederationError, FederationResult, JwtArtifactType,
-    JwtProcessor, SubordinateStatement,
+    extract_claims_unverified, resolve_metadata_policy, EntityConfiguration, EntityId, EntityMetadata, FederationError,
+    FederationResult, JwtArtifactType, JwtProcessor, StatementMetadata, SubordinateStatement,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
-/// Trust Chain as defined in the OpenID Federation specification.
+/// Trust Chain as defined in the OpenID Federation specification: statements whose signatures,
+/// links and rules [`try_new`](Self::try_new) checked, and the Resolved Metadata of the subject.
 ///
-/// Reference: OpenID Federation 1.0 - Section 4 Trust Chains  
+/// Only [`try_new`](Self::try_new) makes one, so its [`metadata`](Self::metadata) is always the
+/// result of a successful resolution and may be used.
+///
+/// Reference: OpenID Federation 1.0 - Section 4 Trust Chains
 /// <https://openid.net/specs/openid-federation-1_0.html#name-trust-chains>
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TrustChain {
-    /// Array of Entity Configurations and Subordinate Statements that form the trust chain
-    /// The first element is the leaf entity's Entity Configuration
-    /// The last element is the Trust Anchor's Entity Configuration
-    /// Everything in between are Subordinate Statements that link the leaf to the trust anchor via intermediary entities.
-    pub chain: Vec<String>, // JWT strings
-    /// Metadata obtained from the trust chain resolution
+    /// The statements as JWTs: first the subject's Entity Configuration, then the Subordinate
+    /// Statements from the subject's Immediate Superior up, last the Trust Anchor's Entity
+    /// Configuration.
+    pub(crate) chain: Vec<String>,
+    /// The subject's Resolved Metadata (Section 6.1.4).
+    pub(crate) metadata: EntityMetadata,
+    /// The subject's Trust Marks that verified under the chain's Trust Anchor.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<crate::EntityMetadata>,
-    /// The leaf's Trust Marks that verified under the chain's Trust Anchor, filled by
+    pub(crate) trust_marks: Option<Vec<crate::TrustMark>>,
+}
+
+impl TrustChain {
+    /// The statements as JWTs: first the subject's Entity Configuration, then the Subordinate
+    /// Statements from the subject's Immediate Superior up, last the Trust Anchor's Entity
+    /// Configuration.
+    pub fn chain(&self) -> &[String] {
+        &self.chain
+    }
+
+    /// The subject's Resolved Metadata: its Entity Configuration's metadata with its Immediate
+    /// Superior's `metadata`, the chain's `allowed_entity_types` constraints and the chain's
+    /// merged metadata policy applied (Section 6.1.4).
+    ///
+    /// Reference: OpenID Federation 1.0 - Section 6.1.4 Resolving the Metadata Policy
+    /// <https://openid.net/specs/openid-federation-1_0.html#section-6.1.4>
+    pub fn metadata(&self) -> &EntityMetadata {
+        &self.metadata
+    }
+
+    /// The subject's Trust Marks that verified under the chain's Trust Anchor, filled by
     /// [`FederationClient::verify_chain_trust_marks`](crate::FederationClient::verify_chain_trust_marks).
     /// `None` until then, since discovery does not verify Trust Marks by itself.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trust_marks: Option<Vec<crate::TrustMark>>,
+    pub fn trust_marks(&self) -> Option<&[crate::TrustMark]> {
+        self.trust_marks.as_deref()
+    }
 }
 
 impl TrustChain {
@@ -160,6 +189,8 @@ impl TrustChain {
         // The entity whose keys are currently authenticated, and those keys.
         let mut endorsed_entity = anchor.claims.sub.clone();
         let mut endorsed_keys = anchor.jwks.clone();
+        // The Subordinate Statements in Trust Anchor to subject order, for resolving the metadata.
+        let mut statements: Vec<SubordinateStatement> = Vec::with_capacity(chain_len - 2);
 
         // Step 2: walk the Subordinate Statements from the anchor towards the leaf. Each one must be
         // issued by `endorsed_entity` and signed with `endorsed_keys`; it then endorses its subject.
@@ -182,8 +213,9 @@ impl TrustChain {
             )
             .map_err(|err| FederationError::TrustChainValidation(format!("Invalid subordinate statement: {}", err)))?;
 
-            endorsed_entity = statement.claims.sub;
-            endorsed_keys = statement.jwks;
+            endorsed_entity = statement.claims.sub.clone();
+            endorsed_keys = statement.jwks.clone();
+            statements.push(statement);
         }
 
         // Step 3: the leaf's Entity Configuration must be about the entity endorsed by the lowest
@@ -199,9 +231,10 @@ impl TrustChain {
         }
 
         // Self-signed with its own keys, and identity-consistent.
-        EntityConfiguration::from_verified_jwt(leaf_jwt, &endorsed_entity, understood_claims).map_err(|err| {
-            FederationError::TrustChainValidation(format!("Invalid leaf entity configuration: {}", err))
-        })?;
+        let leaf =
+            EntityConfiguration::from_verified_jwt(leaf_jwt, &endorsed_entity, understood_claims).map_err(|err| {
+                FederationError::TrustChainValidation(format!("Invalid leaf entity configuration: {}", err))
+            })?;
 
         // Signed with a key endorsed by its superior, so key substitution by the leaf is rejected.
         JwtProcessor::new()
@@ -213,9 +246,18 @@ impl TrustChain {
                 ))
             })?;
 
+        // Resolving the subject's metadata is part of validation: a chain whose metadata does not
+        // resolve is invalid (Sections 6.1.1 and 10.2).
+        let metadata = resolve_subject_metadata(&leaf, &statements).map_err(|err| {
+            FederationError::TrustChainValidation(format!(
+                "The metadata of {} does not resolve: {}",
+                endorsed_entity, err
+            ))
+        })?;
+
         Ok(Self {
             chain: trust_chain,
-            metadata: None,
+            metadata,
             trust_marks: None,
         })
     }
@@ -243,6 +285,49 @@ impl TrustChain {
         let config: EntityConfiguration = extract_claims_unverified(jwt)?;
         Ok((config.claims.iss.clone(), config))
     }
+}
+
+/// Resolves the metadata of a Trust Chain's subject from its Entity Configuration and the
+/// chain's Subordinate Statements, in Trust Anchor to subject order (Section 6.1.4):
+///
+/// 1. The `metadata` of the Immediate Superior's Subordinate Statement overrides the subject's
+///    parameters of the same name, only for Entity Types the subject declares (Section 3.1.1).
+/// 2. Every `allowed_entity_types` constraint in the chain removes the Entity Types it does not
+///    list; `federation_entity` stays (Section 6.2.3).
+/// 3. The chain's metadata policies are merged and applied (Sections 6.1.4.1 and 6.1.4.2).
+///
+/// The metadata may be incomplete until the last step: a Superior's metadata or policy may
+/// supply what the subject's Entity Configuration leaves out. The result must be complete.
+fn resolve_subject_metadata(
+    subject: &EntityConfiguration,
+    statements: &[SubordinateStatement],
+) -> FederationResult<EntityMetadata> {
+    let mut metadata: Map<String, Value> = subject
+        .metadata
+        .as_ref()
+        .map(StatementMetadata::to_json)
+        .unwrap_or_default();
+
+    if let Some(stated) = statements.last().and_then(|superior| superior.metadata.as_ref()) {
+        for (entity_type, parameters) in stated.to_json() {
+            if let (Some(Value::Object(declared)), Value::Object(parameters)) =
+                (metadata.get_mut(&entity_type), parameters)
+            {
+                declared.extend(parameters);
+            }
+        }
+    }
+
+    for allowed in statements
+        .iter()
+        .filter_map(|statement| statement.constraints.as_ref()?.allowed_entity_types.as_ref())
+    {
+        let allowed: Vec<String> = allowed.iter().map(entity_type_identifier).collect();
+        metadata.retain(|entity_type, _| entity_type == "federation_entity" || allowed.contains(entity_type));
+    }
+
+    let policy = resolve_metadata_policy(statements)?.unwrap_or_default();
+    apply_metadata_policy_to_json(metadata, &policy)
 }
 
 #[cfg(test)]
@@ -337,7 +422,7 @@ mod tests {
         }
 
         if let Some(endpoint) = fetch_endpoint {
-            config.metadata = Some(build_federation_metadata(endpoint));
+            config.metadata = Some(build_federation_metadata(endpoint).try_into().unwrap());
         }
 
         config
@@ -423,16 +508,11 @@ mod tests {
         let intermediate_two_url = EntityId::parse(&format!("http://{}", intermediate_two_server.address())).unwrap();
         let trust_anchor_url = EntityId::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
 
-        let leaf_fetch_endpoint = build_fetch_endpoint(&leaf_url);
         let intermediate_one_fetch_endpoint = build_fetch_endpoint(&intermediate_one_url);
         let intermediate_two_fetch_endpoint = build_fetch_endpoint(&intermediate_two_url);
         let trust_anchor_fetch_endpoint = build_fetch_endpoint(&trust_anchor_url);
 
-        let leaf_config = build_entity_configuration(
-            &leaf_url,
-            Some(vec![intermediate_one_url.clone()]),
-            Some(leaf_fetch_endpoint),
-        );
+        let leaf_config = build_entity_configuration(&leaf_url, Some(vec![intermediate_one_url.clone()]), None);
         let intermediate_one_config = build_entity_configuration(
             &intermediate_one_url,
             Some(vec![intermediate_two_url.clone()]),
@@ -526,11 +606,7 @@ mod tests {
         let leaf_url = EntityId::parse(&format!("http://{}", leaf_server.address())).unwrap();
         let trust_anchor_url = EntityId::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
 
-        let leaf_config = build_entity_configuration(
-            &leaf_url,
-            Some(vec![trust_anchor_url.clone()]),
-            Some(build_fetch_endpoint(&leaf_url)),
-        );
+        let leaf_config = build_entity_configuration(&leaf_url, Some(vec![trust_anchor_url.clone()]), None);
         let trust_anchor_config =
             build_entity_configuration(&trust_anchor_url, None, Some(build_fetch_endpoint(&trust_anchor_url)));
 
@@ -588,11 +664,7 @@ mod tests {
         let intermediate_url = EntityId::parse(&format!("http://{}", intermediate_server.address())).unwrap();
         let trust_anchor_url = EntityId::parse(&format!("http://{}", trust_anchor_server.address())).unwrap();
 
-        let leaf_config = build_entity_configuration(
-            &leaf_url,
-            Some(vec![intermediate_url.clone()]),
-            Some(build_fetch_endpoint(&leaf_url)),
-        );
+        let leaf_config = build_entity_configuration(&leaf_url, Some(vec![intermediate_url.clone()]), None);
         let intermediate_config = build_entity_configuration(
             &intermediate_url,
             Some(vec![trust_anchor_url.clone()]),
@@ -700,7 +772,7 @@ mod tests {
         );
         config.authority_hints = authority_hints;
         if let Some(endpoint) = fetch_endpoint {
-            config.metadata = Some(build_federation_metadata(endpoint));
+            config.metadata = Some(build_federation_metadata(endpoint).try_into().unwrap());
         }
         config
     }

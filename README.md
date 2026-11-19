@@ -60,7 +60,8 @@ metadata.federation_entity = Some(FederationEntityMetadata {
     ..Default::default()
 });
 
-config = config.with_metadata(metadata);
+// A statement's `metadata` claim may be partial, so it is a `StatementMetadata`.
+config = config.with_metadata(metadata.try_into()?);
 
 // Create and validate trust chains. The second argument lists the extension claims the
 // application understands, which statements may mark critical in `crit` (none here).

@@ -149,7 +149,7 @@ async fn discovery_authenticates_a_trust_chain_through_a_fetched_statement() {
         ..Default::default()
     });
     let anchor_configuration = EntityConfiguration::new(anchor_id(), anchor_jwks(), now() + 3600, now())
-        .with_metadata(metadata)
+        .with_metadata(metadata.try_into().unwrap())
         .sign(anchor_signer().as_ref())
         .await
         .unwrap();

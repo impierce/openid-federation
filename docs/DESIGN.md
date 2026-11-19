@@ -23,10 +23,10 @@ openid-federation/
 ├── src/
 │   ├── lib.rs           # re-exports every module at the crate root; integration tests
 │   ├── entity.rs        # EntityConfiguration, SubordinateStatement: constructors, validate, from_verified_jwt
-│   ├── trust_chain.rs   # TrustChain: try_new (authentication), expiration, leaf and anchor accessors
+│   ├── trust_chain.rs   # TrustChain: try_new (authentication, metadata resolution), expiration, leaf and anchor accessors
 │   ├── jwt.rs           # JwtArtifactType (`typ` headers), JwtClaims, NumericDate, JwtProcessor, extract_claims_unverified
 │   ├── jwk.rs           # Jwk, JwkSet and their conversion to jsonwebtoken keys; HistoricalKeys (Section 8.7.2)
-│   ├── metadata.rs      # EntityMetadata and the metadata type of each entity type
+│   ├── metadata.rs      # EntityMetadata and the metadata type of each entity type; StatementMetadata, the `metadata` claim as stated
 │   ├── types.rs         # EntityId, EntityType, TrustMarkEntry, TrustMark, TrustMarkIssuers, TrustMarkOwners, MetadataPolicy, PolicyOperators (validate_metadata_policy), Constraints, NamingConstraints
 │   ├── trust_marks.rs   # TrustMark::from_verified_jwt, TrustMarkRejection, FederationClient::verify_trust_mark and verify_chain_trust_marks (Sections 7.2.2, 7.3)
 │   ├── utils.rs         # HttpClient, HttpResponse, FederationClient (fetch, resolve, discover, list), TrustChainDiscovery, UrlValidator
@@ -57,6 +57,7 @@ A trust chain is a list of JWTs: the leaf's Entity Configuration first, then one
 1. The Trust Anchor's Entity Configuration must be self-signed with a key from its own `jwks`. Those keys are the root of trust for the chain. **Whether this anchor is one the caller trusts is the caller's decision**: discovery binds the configuration to the entity identifier it was fetched from, and the caller compares that identifier against its trust list.
 2. Each Subordinate Statement, walking downwards, must be issued by the entity whose keys were just authenticated and be signed with one of those keys. Its `jwks` then becomes the set of authenticated keys for its subject.
 3. The leaf's Entity Configuration must be about the entity the lowest Subordinate Statement endorses, be signed with a key that statement endorses, and be self-signed with a key from its own `jwks`. A leaf therefore cannot substitute its own keys for the ones its superior vouches for.
+4. The leaf's metadata is resolved, and a chain whose metadata does not resolve is invalid (Sections 6.1.1 and 10.2). The Immediate Superior's `metadata` overrides the leaf's parameters, only for the Entity Types the leaf declares (Section 3.1.1); every `allowed_entity_types` constraint in the chain then removes the Entity Types it does not list, never `federation_entity` (Section 6.2.3); last, the chain's metadata policies are merged, Trust Anchor first, and applied (Section 6.1.4). Statements carry their `metadata` claim as `StatementMetadata`, which may be partial, since a Superior may supply what the leaf leaves out; only the result, `TrustChain::metadata`, is complete `EntityMetadata` (ADR 0006). A `TrustChain` comes only from `try_new`, so its metadata is always resolved.
 
 Every statement is signed with the key its header's `kid` names exactly, and lists in `crit` only extension claims the caller understands: `TrustChain::try_new` and the `from_verified_jwt` constructors take them as `understood_claims`, and `FederationClient::with_understood_claims` sets them for discovery. A statement whose `crit` names any other claim is invalid (Section 13.4).
 

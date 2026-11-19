@@ -531,7 +531,7 @@ async fn federation_entity_endpoints_are_checked_when_signing() {
             now() + 3600,
             now(),
         );
-        configuration.metadata = Some(federation_entity(bad));
+        configuration.metadata = Some(federation_entity(bad).try_into().unwrap());
         let error = configuration.sign(&signer).await.unwrap_err();
         assert!(
             error.to_string().contains("federation_fetch_endpoint"),
@@ -545,7 +545,7 @@ async fn federation_entity_endpoints_are_checked_when_signing() {
             now(),
             public_jwks(EC_P256_JWK, "op-key"),
         );
-        statement.metadata = Some(federation_entity(bad));
+        statement.metadata = Some(federation_entity(bad).try_into().unwrap());
         let error = statement.sign(&signer).await.unwrap_err();
         assert!(
             error.to_string().contains("federation_fetch_endpoint"),
@@ -560,7 +560,11 @@ async fn federation_entity_endpoints_are_checked_when_signing() {
         now() + 3600,
         now(),
     );
-    configuration.metadata = Some(federation_entity("https://ta.example.org:8443/fetch?tenant=1"));
+    configuration.metadata = Some(
+        federation_entity("https://ta.example.org:8443/fetch?tenant=1")
+            .try_into()
+            .unwrap(),
+    );
     let jwt = configuration.sign(&signer).await.unwrap();
     assert_eq!(
         EntityConfiguration::from_verified_jwt(&jwt, &anchor_id, &[]).unwrap(),
@@ -574,7 +578,7 @@ async fn federation_entity_endpoints_are_checked_when_signing() {
         now(),
         public_jwks(EC_P256_JWK, "op-key"),
     );
-    statement.metadata = Some(federation_entity("https://op.example.org/fetch"));
+    statement.metadata = Some(federation_entity("https://op.example.org/fetch").try_into().unwrap());
     let jwt = statement.sign(&signer).await.unwrap();
     let verified =
         SubordinateStatement::from_verified_jwt(&jwt, &anchor_id, &leaf_id, &public_jwks(EC_P256_JWK, "ta-key"), &[])

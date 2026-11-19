@@ -4,9 +4,9 @@
 
 use jsonwebtoken::Algorithm;
 use openid_federation::{
-    apply_metadata_policy, EntityConfiguration, EntityId, EntityMetadata, FederationError, InMemorySigner, Jwk, JwkSet,
-    MetadataPolicy, OauthAuthorizationServerMetadata, OpenIdConnectProviderMetadata, OpenIdConnectRelyingPartyMetadata,
-    SubordinateStatement,
+    apply_metadata_policy, EntityConfiguration, EntityId, EntityMetadata, EntityType, FederationError, InMemorySigner,
+    Jwk, JwkSet, MetadataPolicy, OauthAuthorizationServerMetadata, OpenIdConnectProviderMetadata,
+    OpenIdConnectRelyingPartyMetadata, StatementMetadata,
 };
 use serde_json::{json, Value};
 
@@ -293,10 +293,10 @@ fn applying_a_policy_refuses_an_http_endpoint_the_policy_would_replace() {
 const ED25519_DER: &[u8] = include_bytes!("data/signer/ed25519.pkcs8.der");
 const ED25519_JWK: &str = include_str!("data/signer/ed25519.public.jwk.json");
 
-/// Signing refuses metadata whose `additional` repeats a typed parameter: the signed JSON would
-/// carry the parameter twice, and this crate refuses such a statement when it reads one.
+/// The A.2.8 OP metadata signs and reads back with its parameters without a field and its
+/// `issuer` spelling.
 #[tokio::test]
-async fn signing_refuses_a_typed_parameter_in_additional() {
+async fn signed_metadata_keeps_unknown_parameters_and_issuer_spelling() {
     let signer = InMemorySigner::from_der(Algorithm::EdDSA, "op-key", ED25519_DER).unwrap();
     let mut key: Jwk = serde_json::from_str(ED25519_JWK).unwrap();
     key.kid = Some("op-key".to_string());
@@ -305,93 +305,147 @@ async fn signing_refuses_a_typed_parameter_in_additional() {
     let now = chrono::Utc::now().timestamp();
     let op = EntityId::parse("https://op.umu.se").unwrap();
 
-    let mut metadata: EntityMetadata = serde_json::from_value(json!({ "openid_provider": figure_69() })).unwrap();
-    let mut configuration = EntityConfiguration::new(op.clone(), jwks.clone(), now + 3600, now);
-    configuration.metadata = Some(metadata.clone());
+    let metadata: EntityMetadata = serde_json::from_value(json!({ "openid_provider": figure_69() })).unwrap();
+    let configuration =
+        EntityConfiguration::new(op.clone(), jwks, now + 3600, now).with_metadata(metadata.try_into().unwrap());
     let jwt = configuration.sign(&signer).await.unwrap();
     let signed = EntityConfiguration::from_verified_jwt(&jwt, &op, &[]).unwrap();
-    let signed = signed.metadata.unwrap().openid_provider.unwrap();
+    let signed = signed
+        .metadata
+        .unwrap()
+        .to_entity_metadata()
+        .unwrap()
+        .openid_provider
+        .unwrap();
     assert_eq!(
         signed.additional.get("organization_name"),
         Some(&json!("University of Umeå"))
     );
     assert_eq!(signed.issuer.as_str(), "https://op.umu.se");
+}
 
-    metadata
-        .openid_provider
-        .as_mut()
-        .unwrap()
-        .additional
-        .insert("issuer".to_string(), json!("https://other.example.org"));
-    configuration.metadata = Some(metadata.clone());
-    let error = configuration.sign(&signer).await.unwrap_err();
-    assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
-    assert!(
-        error
-            .to_string()
-            .contains("issuer is a typed openid_provider parameter"),
-        "{error}"
+/// Turning typed metadata into the `metadata` claim of a statement refuses an `additional` member
+/// that repeats a typed parameter: serialized, it would replace the typed value.
+#[test]
+fn statement_metadata_refuses_a_typed_parameter_in_additional() {
+    for (entity_type, parameter, value) in [
+        (
+            "federation_entity",
+            "federation_fetch_endpoint",
+            json!("https://other.example.org/fetch"),
+        ),
+        ("openid_provider", "issuer", json!("https://other.example.org")),
+        (
+            "openid_relying_party",
+            "redirect_uris",
+            json!(["https://other.example.org/callback"]),
+        ),
+        (
+            "oauth_authorization_server",
+            "token_endpoint",
+            json!("https://other.example.org/token"),
+        ),
+    ] {
+        let metadata = with_typed_name_in_additional(entity_type, parameter, value);
+        let error = StatementMetadata::try_from(metadata).unwrap_err();
+        assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("{parameter} is a typed {entity_type} parameter")),
+            "{entity_type}: {error}"
+        );
+    }
+}
+
+/// An `extensions` member named after a typed Entity Type would replace the typed member once
+/// serialized, so converting to `StatementMetadata` and applying a policy refuse it.
+#[test]
+fn extensions_named_after_a_typed_entity_type_are_refused() {
+    let mut metadata: EntityMetadata = serde_json::from_value(json!({
+        "openid_relying_party": { "redirect_uris": ["https://rp.example.org/callback"] }
+    }))
+    .unwrap();
+    metadata.extensions.insert(
+        "openid_relying_party".to_string(),
+        json!({ "redirect_uris": ["https://other.example.org/callback"] }),
     );
+    let errors = [
+        StatementMetadata::try_from(metadata.clone()).unwrap_err(),
+        apply_metadata_policy(&metadata, &MetadataPolicy::new()).unwrap_err(),
+    ];
+    for error in errors {
+        assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("openid_relying_party is a typed Entity Type and must not appear in extensions"),
+            "{error}"
+        );
+    }
+}
 
-    let statement = SubordinateStatement::new(EntityId::parse("https://umu.se").unwrap(), op, now + 3600, now, jwks)
-        .with_metadata(metadata);
-    let error = statement.sign(&signer).await.unwrap_err();
+/// `with_federation_entity` refuses an `additional` member that repeats a typed parameter.
+#[test]
+fn with_federation_entity_refuses_a_typed_parameter_in_additional() {
+    let metadata = with_typed_name_in_additional(
+        "federation_entity",
+        "federation_fetch_endpoint",
+        json!("https://other.example.org/fetch"),
+    );
+    let error = StatementMetadata::new()
+        .with_federation_entity(metadata.federation_entity.unwrap())
+        .unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("issuer is a typed openid_provider parameter"),
+            .contains("federation_fetch_endpoint is a typed federation_entity parameter"),
         "{error}"
     );
 }
 
-/// Signs `metadata` for https://rp.example.org in an Entity Configuration and in a Subordinate
-/// Statement, and checks that both refuse it with `message`.
-async fn assert_signing_refuses(metadata: EntityMetadata, message: &str) {
-    let signer = InMemorySigner::from_der(Algorithm::EdDSA, "key", ED25519_DER).unwrap();
-    let mut key: Jwk = serde_json::from_str(ED25519_JWK).unwrap();
-    key.kid = Some("key".to_string());
-    let mut jwks = JwkSet::new();
-    jwks.add_key(key);
-    let now = chrono::Utc::now().timestamp();
-    let entity = EntityId::parse("https://rp.example.org").unwrap();
-
-    let mut configuration = EntityConfiguration::new(entity.clone(), jwks.clone(), now + 3600, now);
-    configuration.metadata = Some(metadata.clone());
-    let error = configuration.sign(&signer).await.unwrap_err();
+/// Section 3.1.1: a statement's `metadata` claim may hold only some of an Entity Type's
+/// parameters, so it parses and round-trips; reading it as types needs it complete.
+#[test]
+fn statement_metadata_may_be_partial() {
+    let json = json!({
+        "federation_entity": { "organization_name": "Example RP" },
+        "openid_relying_party": {},
+        "openid_provider": { "contacts": ["ops@example.org"] },
+        "wallet_provider": { "example": true }
+    });
+    let metadata: StatementMetadata = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&metadata).unwrap(), json);
+    assert_eq!(
+        metadata.federation_entity().unwrap().organization_name.as_deref(),
+        Some("Example RP")
+    );
+    assert_eq!(
+        metadata.parameters("openid_provider"),
+        Some(json!({ "contacts": ["ops@example.org"] }).as_object().unwrap().clone())
+    );
+    assert_eq!(
+        metadata.entity_types(),
+        vec![
+            EntityType::FederationEntity,
+            EntityType::OpenIdRelyingParty,
+            EntityType::OpenIdProvider,
+            EntityType::Other("wallet_provider".to_string()),
+        ]
+    );
+    let error = metadata.to_entity_metadata().unwrap_err();
     assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
-    assert!(error.to_string().contains(message), "{error}");
-
-    let statement = SubordinateStatement::new(
-        EntityId::parse("https://ta.example.org").unwrap(),
-        entity,
-        now + 3600,
-        now,
-        jwks,
-    )
-    .with_metadata(metadata);
-    let error = statement.sign(&signer).await.unwrap_err();
-    assert!(matches!(error, FederationError::InvalidMetadata(_)), "{error:?}");
-    assert!(error.to_string().contains(message), "{error}");
 }
 
-/// The same refusal for a typed RP and Authorization Server parameter in `additional`.
-#[tokio::test]
-async fn signing_refuses_a_typed_rp_or_as_parameter_in_additional() {
-    let mut rp = relying_party();
-    rp.openid_relying_party.as_mut().unwrap().additional.insert(
-        "redirect_uris".to_string(),
-        json!(["https://other.example.org/callback"]),
-    );
-    assert_signing_refuses(rp, "redirect_uris is a typed openid_relying_party parameter").await;
-
-    let mut server: EntityMetadata =
-        serde_json::from_value(json!({ "oauth_authorization_server": { "issuer": "https://rp.example.org" } }))
-            .unwrap();
-    server
-        .oauth_authorization_server
-        .as_mut()
-        .unwrap()
-        .additional
-        .insert("token_endpoint".to_string(), json!("https://other.example.org/token"));
-    assert_signing_refuses(server, "token_endpoint is a typed oauth_authorization_server parameter").await;
+/// Section 3.1.1: each member of the `metadata` claim is a JSON object, and `federation_entity`
+/// keeps its types.
+#[test]
+fn statement_metadata_refuses_a_member_that_does_not_fit() {
+    for json in [
+        json!({ "openid_relying_party": ["not", "an", "object"] }),
+        json!({ "federation_entity": { "federation_fetch_endpoint": 42 } }),
+    ] {
+        let error = serde_json::from_value::<StatementMetadata>(json.clone()).unwrap_err();
+        assert!(!error.to_string().is_empty(), "{json}");
+    }
 }

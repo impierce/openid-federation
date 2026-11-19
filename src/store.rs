@@ -4,9 +4,9 @@
 
 use crate::jwt::CLOCK_SKEW_LEEWAY;
 use crate::{
-    extract_claims_unverified, Constraints, EntityId, EntityMetadata, EntityType, FederationError, FederationResult,
-    JwkSet, JwtArtifactType, PolicyOperators, StoreError, SubordinateStatement, SubordinateStatementBuilder, TrustMark,
-    TrustMarkStatus,
+    extract_claims_unverified, Constraints, EntityId, EntityType, FederationError, FederationResult, JwkSet,
+    JwtArtifactType, PolicyOperators, StatementMetadata, StoreError, SubordinateStatement, SubordinateStatementBuilder,
+    TrustMark, TrustMarkStatus,
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -31,7 +31,7 @@ pub struct Subordinate {
     /// Whether the subordinate is an Intermediate Entity, with Subordinates of its own.
     pub intermediate: bool,
     /// Metadata the Superior states about the subordinate, which overrides the subordinate's own.
-    pub metadata: Option<EntityMetadata>,
+    pub metadata: Option<StatementMetadata>,
     /// The metadata policy the Superior applies to the subordinate and the entities below it.
     pub metadata_policy: Option<HashMap<String, HashMap<String, PolicyOperators>>>,
     /// The policy operators that are not standard and that the metadata policy depends on.
@@ -81,7 +81,7 @@ impl Subordinate {
     ///
     /// Reference: OpenID Federation 1.0 - Section 3.1.3
     /// (<https://openid.net/specs/openid-federation-1_0.html#section-3.1.3>)
-    pub fn with_metadata(mut self, metadata: EntityMetadata) -> Self {
+    pub fn with_metadata(mut self, metadata: StatementMetadata) -> Self {
         self.metadata = Some(metadata);
         self
     }
